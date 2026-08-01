@@ -172,9 +172,11 @@ worth having.
 
 ## Addendum: key files
 
-- `docs/baseline.md` — architecture spec. Its Plane 1 section now describes the
-  protocol correctly; Plane 2 still claims `pane.updated` reports cwd, which it
-  does not.
+- `docs/baseline.md` — architecture spec, corrected in this session. Plane 1 now
+  describes the socket as one request per connection, says which events carry a
+  whole node and which only identifiers, and records the three gaps: no event
+  for a working directory change, no branch or git status on the wire, and a
+  backlog replayed on subscribe.
 - `herdr-api.el` — socket transport, three error conditions, event subscription.
 - `herdr-session.el` — the tree, the fingerprint, the poll, and
   `herdr-session-fingerprint-functions` for panels showing what the tree does not

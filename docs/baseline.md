@@ -93,16 +93,37 @@ underscores, so subscribing to `pane.updated` delivers `{"event":"pane_updated",
 reply, which is easy to mistake for "not an event" and drop; do not, or the
 client waits forever on a stream that will never carry one.
 
-For a global dashboard, subscribe to the lifecycle and update events, which each
-carry the full node:
+For a global dashboard, subscribe to the lifecycle and update events. The
+lifecycle ones carry a whole node; the focus ones carry bare identifiers, which
+is all a focus change is:
 
-- `pane.created` / `pane.updated` / `pane.closed` / `pane.focused` — `pane.updated`
-  ships the whole `PaneInfo` including `agent_status`, so status changes arrive
-  here globally.
+- `pane.created` / `pane.updated` — carry the whole `PaneInfo` under `pane`,
+  `agent_status` included, so status changes arrive here globally.
+- `workspace.created` carries `workspace`, `tab.created` carries `tab`.
+- `pane.focused` / `workspace.focused` / `tab.focused` — identifiers only.
 - `pane.agent_detected {pane_id, agent?, released, final_status?}` — an agent
   appeared/left in a pane. Global.
-- `workspace.*` and `tab.*` (created/updated/renamed/moved/reordered/closed/
-  focused) — keep the tree in sync.
+- `workspace.*` and `tab.*` (created/updated/renamed/moved/reordered/closed)
+  — keep the tree in sync.
+
+**Events do not cover everything the dashboard shows, and the gap is quiet.**
+Nothing is emitted when a pane's working directory changes. That matters more
+than it sounds, because a workspace label is *derived* from the working
+directory of its root pane: `cd` in a shell and herdr renames the workspace,
+silently. Driving one `cd` while logging the stream produced 213 events, every
+single one about focus, while the label changed on the server. A client
+listening only to events shows the directory a workspace started in for as long
+as the session lasts. Poll for it.
+
+The same holds for the branch and git status herdr draws on a space. It computes
+both and puts neither on the wire — `WorkspaceInfo` has no such field, and the
+only `branch` in the API is on `WorktreeInfo`, reachable through `worktree.list`
+and only for real worktrees. Ask git yourself.
+
+One more shape worth knowing before building on the stream: `events.subscribe`
+replays a backlog on connect, so the first events after subscribing may concern
+panes that closed long ago. Harmless if a stale event only costs a snapshot;
+not harmless if you patch a model incrementally from them.
 
 There is a dedicated `pane.agent_status_changed` event, but its subscription is
 **per-pane** (`{pane_id, agent_status?}`). For a whole-session view, prefer the
