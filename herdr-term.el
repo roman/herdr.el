@@ -595,7 +595,7 @@ the grid in a state only a new connection can resolve."
         ;; is whatever its own client sized it to.  This is where the
         ;; window gets to disagree, and the only place the stream is
         ;; known to be up.
-        (herdr-term--fit-to-window)
+        (herdr-term-fit-to-window)
         nil)
     (error (herdr-term--reconnect (format "full apply failed: %S" err))
            'resync)))
@@ -723,7 +723,7 @@ redisplay runs this with an arbitrary buffer current."
         (with-current-buffer buffer
           (herdr-term--schedule-resize window))))))
 
-(defun herdr-term--fit-to-window ()
+(defun herdr-term-fit-to-window ()
   "Schedule a resize when this buffer's window and its grid disagree."
   (when-let* ((window (get-buffer-window (current-buffer) t)))
     (herdr-term--schedule-resize window)))

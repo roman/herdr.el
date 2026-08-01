@@ -57,6 +57,22 @@
   :group 'herdr-panel
   :type 'string)
 
+(defface herdr-agents-claude
+  '((((background dark)) :foreground "#d97757")
+    (((background light)) :foreground "#c05621")
+    (t :inherit font-lock-type-face))
+  "Face for Claude's mark, in Claude's own orange."
+  :group 'herdr-panel)
+
+(defcustom herdr-agents-icon-faces
+  '(("claude" . herdr-agents-claude))
+  "Face for the mark of a kind of agent.
+A kind with no face here uses `herdr-panel-agent', so an agent has to
+be worth telling apart by colour before it earns one."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(alist :key-type string :value-type face))
+
 (defcustom herdr-agents-icons
   '(("claude" . "✳"))
   "Glyph to show for a kind of agent, in place of its name.
@@ -184,7 +200,8 @@ See `herdr-agents-icons' for which kinds have a glyph."
   (when-let* ((kind (or (gethash "agent" agent)
                         (gethash "display_agent" agent))))
     (herdr-panel-text (or (cdr (assoc kind herdr-agents-icons)) kind)
-                      'herdr-panel-agent)))
+                      (or (cdr (assoc kind herdr-agents-icon-faces))
+                          'herdr-panel-agent))))
 
 (defun herdr-agents--name (agent)
   "Return what to call AGENT.

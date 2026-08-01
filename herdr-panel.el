@@ -119,10 +119,13 @@ open here from what is merely running over there."
 ;; the whole thing recedes.
 
 (defface herdr-panel-path
-  '((((background dark)) :foreground "#7f849c")
-    (((background light)) :foreground "#8c8fa1")
-    (t :inherit shadow))
-  "Face for the directory a workspace sits in."
+  '((((background dark)) :foreground "#f9e2af")
+    (((background light)) :foreground "#df8e1d")
+    (t :inherit font-lock-string-face))
+  "Face for the directory a workspace sits in.
+The yellow a folder is drawn in, chosen because a path has to be told
+apart from a dimmed entry at a glance, and any grey quiet enough to
+sit behind the name was too near the grey that means \"not open\"."
   :group 'herdr-panel)
 
 (defface herdr-panel-branch
@@ -147,10 +150,12 @@ open here from what is merely running over there."
   :group 'herdr-panel)
 
 (defface herdr-panel-dirty
-  '((((background dark)) :foreground "#f9e2af")
-    (((background light)) :foreground "#df8e1d")
-    (t :inherit warning))
-  "Face for the count of files changed in a checkout."
+  '((((background dark)) :foreground "#f38ba8")
+    (((background light)) :foreground "#d20f39")
+    (t :inherit error))
+  "Face for the count of files changed in a checkout.
+Red rather than the yellow it had, which the path now wears: two
+yellows side by side on one line told nothing apart."
   :group 'herdr-panel)
 
 (defface herdr-panel-agent

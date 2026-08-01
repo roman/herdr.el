@@ -47,7 +47,21 @@
 (require 'herdr-spaces)
 
 (declare-function herdr-term-open "herdr-term" (pane &optional writable))
+(declare-function herdr-term-fit-to-window "herdr-term" ())
 (defvar herdr-term--pane)
+(defvar herdr-term-command-mode-map)
+
+;;; Keys
+
+;; Reachable from either side of the layout, because the column is as
+;; often in the way of a terminal as it is of itself.  `C-c' is already
+;; the prefix a herdr buffer answers on, and evil binds it in neither
+;; normal nor insert state, so this works with evil and without it.
+(keymap-set herdr-panel-mode-map "C-c C-b" #'herdr-ui-toggle-panels)
+
+(with-eval-after-load 'herdr-term
+  (keymap-set herdr-term-command-mode-map "C-c C-b"
+              #'herdr-ui-toggle-panels))
 
 ;;; Options
 
@@ -105,14 +119,55 @@ a prefix argument, PANE is read with completion."
     (herdr-ui--clear)
     (delete-other-windows)
     (herdr-panel-open-pane pane)
-    (herdr-ui--display (herdr-spaces--prepare) -1 herdr-ui-spaces-height)
-    (herdr-ui--display (herdr-agents--prepare) 1
-                       (- 1 herdr-ui-spaces-height))
+    (herdr-ui--show-panels)
     (when-let* ((buffer (herdr-ui--terminal-buffer pane)))
       (with-current-buffer buffer
         (herdr-ui-tab-line-mode 1))
       (when-let* ((window (get-buffer-window buffer)))
         (select-window window)))))
+
+;;;###autoload
+(defun herdr-ui-toggle-panels ()
+  "Show or hide the column of panels.
+Hiding takes the windows off the frame and leaves the panels
+themselves alone, still reading the session, so showing them again
+costs nothing and shows the present rather than the past."
+  (interactive)
+  (if (herdr-ui-panels-visible-p)
+      (herdr-ui--clear)
+    (unless (herdr-session-live-p)
+      (herdr-session-start))
+    (when herdr-ui-tame-window-packages
+      (herdr-ui--tame))
+    (herdr-ui--show-panels))
+  (herdr-ui--refit-terminals))
+
+(defun herdr-ui--refit-terminals (&optional frame)
+  "Ask every herdr terminal on FRAME to fit the window it now has.
+Said rather than left to be noticed: the hook that notices a window
+resizing runs from redisplay, and a layout rearranged by a command
+does not always reach it, which leaves a terminal drawing into a
+fraction of the width it was just given."
+  (when (fboundp 'herdr-term-fit-to-window)
+    (dolist (window (window-list frame))
+      (let ((buffer (window-buffer window)))
+        (when (buffer-local-value 'herdr-term--pane buffer)
+          (with-current-buffer buffer
+            (herdr-term-fit-to-window)))))))
+
+(defun herdr-ui-panels-visible-p (&optional frame)
+  "Return non-nil when the panel column is on FRAME."
+  (seq-some (lambda (window)
+              (and (window-parameter window 'window-side)
+                   (buffer-local-value 'herdr-panel-refresh-function
+                                       (window-buffer window))))
+            (window-list frame)))
+
+(defun herdr-ui--show-panels ()
+  "Put the panels in their column, spaces above agents."
+  (herdr-ui--display (herdr-spaces--prepare) -1 herdr-ui-spaces-height)
+  (herdr-ui--display (herdr-agents--prepare) 1
+                     (- 1 herdr-ui-spaces-height)))
 
 (defun herdr-ui--clear (&optional frame)
   "Take the herdr side windows off FRAME, leaving other windows alone."
