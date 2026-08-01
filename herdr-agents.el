@@ -57,6 +57,21 @@
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-agents-icons
+  '(("claude" . "✳"))
+  "Glyph to show for a kind of agent, in place of its name.
+A kind with no glyph here keeps its name, which says more than a
+generic one would.
+
+Nerd Fonts carries no Claude glyph, and neither does `nerd-icons';
+the nearest it offers are a robot and a brain.  The default is the
+mark Claude Code puts in its own terminal title, so it is Claude's
+own, reads at any size and needs no particular font.  Put a private
+codepoint here if your font has the real logo."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(alist :key-type string :value-type string))
+
 ;;; Keymaps
 
 (defvar-keymap herdr-agents-mode-map
@@ -159,8 +174,11 @@ would be a number that never changes and never distinguishes."
             (number-to-string (gethash "number" tab)))))))
 
 (defun herdr-agents--kind (agent)
-  "Return what kind of agent AGENT is, as herdr detected it."
-  (or (gethash "display_agent" agent) (gethash "agent" agent)))
+  "Return what kind of agent AGENT is, as a glyph or as a name.
+See `herdr-agents-icons' for which kinds have a glyph."
+  (when-let* ((kind (or (gethash "agent" agent)
+                        (gethash "display_agent" agent))))
+    (or (cdr (assoc kind herdr-agents-icons)) kind)))
 
 (defun herdr-agents--name (agent)
   "Return what to call AGENT.

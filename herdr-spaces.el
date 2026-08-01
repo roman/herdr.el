@@ -57,6 +57,20 @@
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-spaces-git t
+  "Whether to show the branch and working tree state of a workspace.
+This runs git once per workspace per `herdr-spaces-git-ttl', which on
+a very large repository is worth knowing about."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'boolean)
+
+(defcustom herdr-spaces-git-ttl 5
+  "Seconds an answer from git is reused before asking again."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'number)
+
 ;;; Keymaps
 
 (defvar-keymap herdr-spaces-mode-map
@@ -71,7 +85,17 @@
 (define-derived-mode herdr-spaces-mode magit-section-mode "Herdr Spaces"
   "Major mode for the herdr spaces panel."
   :interactive nil
-  (herdr-panel-init #'herdr-spaces-refresh #'herdr-spaces--pane-at-point))
+  (herdr-panel-init #'herdr-spaces-refresh #'herdr-spaces--pane-at-point)
+  ;; Nothing on the wire says a branch changed, so the panel has to say
+  ;; so itself or a checkout would sit stale until something else moved.
+  (add-hook 'herdr-session-fingerprint-functions #'herdr-spaces--git-marks))
+
+(defun herdr-spaces--git-marks ()
+  "Return the git state of every workspace, for the session fingerprint."
+  (and herdr-spaces-git
+       (mapcar (lambda (workspace)
+                 (herdr-spaces--git (herdr-spaces--directory workspace)))
+               (herdr-session-workspaces))))
 
 ;;; Commands
 
@@ -108,6 +132,63 @@ windows does not have to undo a `pop-to-buffer' first."
             (insert (propertize "  no spaces\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))
+
+;;; Git
+
+;; herdr shows a branch and a git status on a space, and computes both
+;; itself, but puts neither on the wire for a workspace that is not a
+;; worktree.  We know the directory, so we ask git here instead.  One
+;; `status' call answers all three questions at once, and its answer is
+;; cached, because a redraw must never cost a subprocess per workspace.
+
+(defvar herdr-spaces--git-cache (make-hash-table :test #'equal)
+  "Cached git answers, keyed by directory.
+Each value has the form (WHEN . DESCRIPTION).")
+
+(defun herdr-spaces--git (directory)
+  "Return a short description of DIRECTORY's git state, or nil."
+  (when (and herdr-spaces-git directory (file-directory-p directory))
+    (let ((cached (gethash directory herdr-spaces--git-cache)))
+      (if (and cached (< (- (float-time) (car cached)) herdr-spaces-git-ttl))
+          (cdr cached)
+        (let ((description (herdr-spaces--git-ask directory)))
+          (puthash directory (cons (float-time) description)
+                   herdr-spaces--git-cache)
+          description)))))
+
+(defun herdr-spaces--git-ask (directory)
+  "Ask git about DIRECTORY and return a description, or nil.
+Untracked files are excluded, which is what keeps this quick on a
+large repository and is rarely what the count is wanted for."
+  (with-temp-buffer
+    (let ((status (ignore-errors
+                    (call-process "git" nil (list t nil) nil
+                                  "-C" directory "status"
+                                  "--porcelain=v2" "--branch" "-uno"))))
+      (when (eql status 0)
+        (herdr-spaces--git-describe (buffer-string))))))
+
+(defun herdr-spaces--git-describe (output)
+  "Return a description of git status OUTPUT, or nil when it has none."
+  (let (branch ahead behind (changed 0))
+    (dolist (line (split-string output "\n" t))
+      (cond
+        ((string-prefix-p "# branch.head " line)
+         (setq branch (substring line (length "# branch.head "))))
+        ((string-prefix-p "# branch.ab " line)
+         (pcase-let ((`(,a ,b) (split-string
+                                (substring line (length "# branch.ab ")))))
+           (setq ahead (string-to-number a)
+                 behind (abs (string-to-number b)))))
+        ((not (string-prefix-p "#" line))
+         (setq changed (1+ changed)))))
+    (when (and branch (not (equal branch "(detached)")))
+      (string-join
+       (delq nil (list branch
+                       (and ahead (> ahead 0) (format "↑%d" ahead))
+                       (and behind (> behind 0) (format "↓%d" behind))
+                       (and (> changed 0) (format "*%d" changed))))
+       " "))))
 
 ;;; Rendering
 
@@ -146,24 +227,26 @@ holds a single child."
              :indent (if indented "   " " "))))))
 
 (defun herdr-spaces--detail (workspace)
-  "Return the second line for WORKSPACE.
-The directory it sits in, which is where its name comes from and what
-tells two checkouts of the same basename apart, then its checkout when
-it is a worktree, then how many windows it holds when it holds more
-than one.  herdr shows the branch and the git status here, and neither
-is on the wire for a workspace that is not a worktree."
-  (let ((parts (delq nil
-                     (list (herdr-spaces--directory workspace)
-                           (herdr-spaces--branch workspace)
-                           (herdr-spaces--windows workspace)))))
-    (and parts (string-join parts (concat " " herdr-spaces-separator " ")))))
+  "Return the lines that follow WORKSPACE's name.
+Where it sits, then what git makes of it.  The directory is where the
+name comes from and what tells two checkouts of the same basename
+apart; the branch and the counts are what herdr shows on a space and
+does not put on the wire."
+  (let ((directory (herdr-spaces--directory workspace)))
+    (list (string-join
+           (delq nil (list (and directory (abbreviate-file-name directory))
+                           (herdr-spaces--windows workspace)))
+           (concat " " herdr-spaces-separator " "))
+          (string-join
+           (delq nil (list (herdr-spaces--git directory)
+                           (herdr-spaces--branch workspace)))
+           (concat " " herdr-spaces-separator " ")))))
 
 (defun herdr-spaces--directory (workspace)
-  "Return where WORKSPACE sits, shortened for a narrow panel."
+  "Return the directory WORKSPACE's root pane sits in, or nil."
   (when-let* ((tab (gethash "active_tab_id" workspace))
-              (pane (car (herdr-session-panes tab)))
-              (cwd (gethash "cwd" pane)))
-    (abbreviate-file-name cwd)))
+              (pane (car (herdr-session-panes tab))))
+    (gethash "cwd" pane)))
 
 (defun herdr-spaces--windows (workspace)
   "Return the window count of WORKSPACE, or nil when it is one.

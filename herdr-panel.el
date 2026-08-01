@@ -203,8 +203,9 @@ SPEC is a plist:
                with no buffer here
   `:label'     the name, shown beside the mark
   `:aside'     more of the first line, shown after the name
-  `:detail'    a second line, indented under the name, or nil for an
-               entry of one line
+  `:detail'    what follows on further lines, indented under the
+               name: a string, a list of strings for several lines, or
+               nil for an entry of one line
   `:indent'    what precedes the mark, for an entry inside a group
 
 An entry is one row however many lines it takes.  It is filled as one
@@ -232,15 +233,17 @@ whether or not they happen to have opened it."
                    aside (if faded 'herdr-panel-unopened
                            'herdr-panel-detail))))
     (insert "\n")
-    (when (and detail (not (string-empty-p detail)))
-      ;; Aligned under the name rather than under the mark, so a column
-      ;; of entries reads as a column of names with notes beneath them.
-      (insert (make-string (+ (length indent) 2) ?\s))
-      (herdr-panel--add-face
-       (point)
-       (progn (insert detail) (point))
-       (if faded 'herdr-panel-unopened 'herdr-panel-detail))
-      (insert "\n"))
+    ;; Aligned under the name rather than under the mark, so a column of
+    ;; entries reads as a column of names with notes beneath them.
+    (let ((margin (make-string (+ (length indent) 2) ?\s)))
+      (dolist (line (ensure-list detail))
+        (when (and line (not (string-empty-p line)))
+          (insert margin)
+          (herdr-panel--add-face
+           (point)
+           (progn (insert line) (point))
+           (if faded 'herdr-panel-unopened 'herdr-panel-detail))
+          (insert "\n"))))
     (when (eq emphasis 'current)
       ;; Merged beneath, so that the mark and the name keep their own
       ;; colours and only the background comes from here.  Replacing the

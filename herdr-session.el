@@ -100,6 +100,14 @@ at once."
 
 ;;; Variables
 
+(defvar herdr-session-fingerprint-functions nil
+  "Functions returning extra values that should provoke a redraw.
+A panel adds to this when it shows something the session tree does not
+carry.  A git branch is the example: herdr computes one but puts it on
+the wire for no workspace that is not a worktree, so a client that
+reads it locally has to say when it changed, or the change waits for
+something else to move.")
+
 (defvar herdr-session-change-hook nil
   "Hook run after the session tree changed.
 Panels add themselves here to redraw.  It runs outside any process
@@ -207,7 +215,8 @@ and scroll positions does not count as a change."
                   (list (gethash "pane_id" pane)
                         (gethash "agent_status" pane)
                         (gethash "focused" pane)))
-                (herdr-session-panes))))
+                (herdr-session-panes))
+        (mapcar #'funcall herdr-session-fingerprint-functions)))
 
 (defun herdr-session--note-event (_event)
   "Mark the tree stale and schedule a refresh.
