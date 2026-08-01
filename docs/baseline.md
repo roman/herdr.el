@@ -44,8 +44,26 @@ Emacs speaks the JSON API natively: `make-network-process :family 'local :servic
 
 ## Plane 1 — Control: the dashboard, from the JSON API
 
-Two connections. One request/response socket for actions, one long-lived socket
-for the event stream. Correlate replies by the `id` you send.
+A connection per request, plus one long-lived connection for the event stream.
+
+An earlier draft of this section described a multiplexed socket where replies
+are correlated by the `id` you send. That is wrong, and it matters, because it
+invites a correlation layer for a protocol with nothing to correlate. What the
+server actually does — read from `src/api/server.rs`, then confirmed against a
+running 0.7.5 — is read a single request line per connection, write a single
+reply line, and close. There is no read loop. `herdr-api-request` therefore
+opens a connection, spends it and drops it.
+
+Two more details the same exercise turned up, both of which bite on first
+contact:
+
+- `params` is mandatory, including for methods that define no parameters.
+  Sending `{"id":…,"method":"ping"}` is an `invalid_request` error; it must be
+  `{"id":…,"method":"ping","params":{}}`.
+- The `id` still comes back on the reply, so it is worth checking, but a
+  request the server could not parse is answered with an empty one.
+
+`events.subscribe` is the exception that keeps its connection open; see below.
 
 ### Bootstrap the model
 
@@ -67,8 +85,16 @@ on it). Each node is rich enough to render directly:
 ### Stay live with events
 
 `events.subscribe {subscriptions:[…]}` acks, then pushes events on the same open
-socket (`src/api/schema/events.rs`). For a global dashboard, subscribe to the
-lifecycle and update events, which each carry the full node:
+socket (`src/api/schema/events.rs`). Two shape details, both confirmed live:
+subscriptions are tagged objects rather than names — `[{"type":"pane.updated"}]`,
+not `["pane.updated"]` — and the events that come back rename the dots to
+underscores, so subscribing to `pane.updated` delivers `{"event":"pane_updated",
+"data":{…}}`. A refusal arrives on that same connection as an ordinary error
+reply, which is easy to mistake for "not an event" and drop; do not, or the
+client waits forever on a stream that will never carry one.
+
+For a global dashboard, subscribe to the lifecycle and update events, which each
+carry the full node:
 
 - `pane.created` / `pane.updated` / `pane.closed` / `pane.focused` — `pane.updated`
   ships the whole `PaneInfo` including `agent_status`, so status changes arrive
