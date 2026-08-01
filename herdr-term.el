@@ -93,6 +93,14 @@ A reconnect requested sooner than this is deferred, never dropped."
   :group 'herdr-term
   :type 'number)
 
+(defcustom herdr-term-scroll-lines 3
+  "How many lines one wheel notch scrolls the pane.
+This matches herdr's own mouse scroll default, so a pane moves by the
+same amount whether it is scrolled from Emacs or from the herdr TUI."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-term
+  :type 'natnum)
+
 (defcustom herdr-term-max-connect-attempts 3
   "How many times to retry a stream that exits without ever syncing.
 This bounds recovery for a pane id that is invalid or has vanished,
@@ -102,6 +110,9 @@ which would otherwise be retried forever."
   :type 'natnum)
 
 ;;; Variables
+
+(defconst herdr-term--scroll-limit 65535
+  "Largest line count `terminal.scroll' accepts, its `lines' being a u16.")
 
 (defvar-local herdr-term--process nil
   "Process running this buffer's frame stream.")
@@ -143,10 +154,18 @@ which makes it the record of whether that connection ever synced.")
 
 ;;; Keymaps
 
+;; The shifted page keys are what a terminal emulator conventionally uses
+;; for its own scrollback, which leaves the unshifted ones to reach the
+;; program running in the pane.
 (defvar-keymap herdr-term-command-mode-map
   :doc "Keymap for `herdr-term-command-mode'."
   "C-c C-l" #'herdr-term-resync
-  "C-c C-k" #'herdr-term-close)
+  "C-c C-k" #'herdr-term-close
+  "C-c C-e" #'herdr-term-scroll-to-bottom
+  "S-<prior>" #'herdr-term-scroll-page-up
+  "S-<next>" #'herdr-term-scroll-page-down
+  "<wheel-up>" #'herdr-term-scroll-up
+  "<wheel-down>" #'herdr-term-scroll-down)
 
 ;;; Commands
 
@@ -206,6 +225,35 @@ after `herdr-term-max-connect-attempts' can be retried."
   "Kill this buffer, and with it its stream."
   (interactive)
   (kill-buffer (current-buffer)))
+
+(defun herdr-term-scroll-up ()
+  "Scroll this pane back through its history by one wheel notch.
+The distance is `herdr-term-scroll-lines'."
+  (interactive)
+  (herdr-term--scroll "up" herdr-term-scroll-lines))
+
+(defun herdr-term-scroll-down ()
+  "Scroll this pane forward through its history by one wheel notch.
+The distance is `herdr-term-scroll-lines'."
+  (interactive)
+  (herdr-term--scroll "down" herdr-term-scroll-lines))
+
+(defun herdr-term-scroll-page-up ()
+  "Scroll this pane back through its history by a screenful."
+  (interactive)
+  (herdr-term--scroll "up" (herdr-term--page-lines)))
+
+(defun herdr-term-scroll-page-down ()
+  "Scroll this pane forward through its history by a screenful."
+  (interactive)
+  (herdr-term--scroll "down" (herdr-term--page-lines)))
+
+(defun herdr-term-scroll-to-bottom ()
+  "Return this pane to the end of its history.
+The distance asked for is deliberately larger than any scrollback, and
+herdr clamps it, which saves asking the server where the bottom is."
+  (interactive)
+  (herdr-term--scroll "down" herdr-term--scroll-limit))
 
 (define-minor-mode herdr-term-command-mode
   "Bind the client-local commands of a herdr terminal buffer.
@@ -526,6 +574,39 @@ frame behind."
   (ghostel--write-vt ghostel--term bytes)
   (ghostel--redraw-now (current-buffer) t))
 
+;;; Scrolling
+
+(defun herdr-term--page-lines ()
+  "Return how many lines make a screenful of this pane.
+Two rows are kept so that a page of scrolling overlaps its neighbour,
+which is what makes a long read followable."
+  (max 1 (- (or herdr-term--rows 24) 2)))
+
+(defun herdr-term--scroll (direction lines)
+  "Scroll this buffer's pane LINES lines in DIRECTION.
+DIRECTION is the string \"up\" or \"down\".
+
+Where the pane is scrolled to is a property of the pane and not of this
+buffer, so the herdr TUI and every other client showing it scroll too.
+herdr keeps no per-client viewport, which is also why an observing
+buffer cannot scroll at all: `terminal.scroll' is a control command,
+and only one client at a time holds control of a pane."
+  (unless herdr-term--writable
+    (user-error "Buffer only observes %s; reopen it writable to scroll"
+                herdr-term--pane))
+  (unless (process-live-p herdr-term--process)
+    (user-error "No live stream for %s" herdr-term--pane))
+  (when (> lines 0)
+    (herdr-term--send-command
+     (list :type "terminal.scroll"
+           :direction direction
+           :lines (min lines herdr-term--scroll-limit)
+           ;; `wheel' moves the pane's viewport over its scrollback.
+           ;; `page_key' would instead deliver PageUp or PageDown to the
+           ;; program as input, which the input bridge already does for
+           ;; the unshifted keys.
+           :source "wheel"))))
+
 ;;; Input
 
 (defun herdr-term--ensure-input-bridge ()
@@ -563,6 +644,11 @@ which resets `ghostel--process' to nil."
   (setq herdr-term--input-bridge nil
         ghostel--process nil))
 
+(defun herdr-term--send-command (command)
+  "Write COMMAND, a plist, to the control stream as one JSON line."
+  (process-send-string herdr-term--process
+                       (concat (json-serialize command) "\n")))
+
 (defun herdr-term--send-input (bytes)
   "Forward raw terminal input BYTES to the stream as `terminal.input'."
   (when (and herdr-term--writable
@@ -570,12 +656,9 @@ which resets `ghostel--process' to nil."
     (let ((unibyte (if (multibyte-string-p bytes)
                        (encode-coding-string bytes 'utf-8)
                      bytes)))
-      (process-send-string
-       herdr-term--process
-       (concat (json-serialize
-                (list :type "terminal.input"
-                      :bytes (base64-encode-string unibyte t)))
-               "\n")))))
+      (herdr-term--send-command
+       (list :type "terminal.input"
+             :bytes (base64-encode-string unibyte t))))))
 
 ;;; Presentation
 

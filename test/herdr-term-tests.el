@@ -366,6 +366,50 @@ before initial full frame\" for every frame that follows."
     (herdr-term--send-input "ls\r")
     (should (null herdr-term-test-sent))))
 
+;;; Scrolling
+
+(ert-deftest herdr-term-scroll:sends-a-wheel-scroll ()
+  "A scroll travels as `terminal.scroll', not as injected page keys."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable t)
+    (herdr-term-scroll-up)
+    (let ((command (json-parse-string
+                    (string-trim-right (car herdr-term-test-sent)))))
+      (should (equal (gethash "type" command) "terminal.scroll"))
+      (should (equal (gethash "direction" command) "up"))
+      (should (equal (gethash "source" command) "wheel"))
+      (should (eql (gethash "lines" command) herdr-term-scroll-lines)))))
+
+(ert-deftest herdr-term-scroll:pages-by-a-screenful ()
+  "A page keeps two rows, so consecutive pages overlap."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable t
+          herdr-term--rows 40)
+    (herdr-term-scroll-page-down)
+    (let ((command (json-parse-string
+                    (string-trim-right (car herdr-term-test-sent)))))
+      (should (equal (gethash "direction" command) "down"))
+      (should (eql (gethash "lines" command) 38)))))
+
+(ert-deftest herdr-term-scroll:bottom-stays-within-the-protocol ()
+  "Returning to the end asks for more lines than any pane holds.
+The count still has to fit the protocol's own `lines' field, which
+herdr then clamps to the real bottom."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable t)
+    (herdr-term-scroll-to-bottom)
+    (let ((command (json-parse-string
+                    (string-trim-right (car herdr-term-test-sent)))))
+      (should (equal (gethash "direction" command) "down"))
+      (should (eql (gethash "lines" command) 65535)))))
+
+(ert-deftest herdr-term-scroll:refuses-a-read-only-buffer ()
+  "Scrolling is a control command, and an observer holds no control."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable nil)
+    (should-error (herdr-term-scroll-up) :type 'user-error)
+    (should (null herdr-term-test-sent))))
+
 ;;; Panes
 
 (ert-deftest herdr-term--panes:pairs-ids-with-info ()
