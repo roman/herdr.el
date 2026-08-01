@@ -181,6 +181,17 @@ yellows side by side on one line told nothing apart."
   "Face for the mark saying a pane is mirrored for reading only."
   :group 'herdr-panel)
 
+(defface herdr-panel-border
+  '((((background dark)) :overline "#45475a" :extend t)
+    (((background light)) :overline "#bcc0cc" :extend t)
+    (t :overline t :extend t))
+  "Face ruling a line off from whatever sits above it.
+An overline on the panel's own first line, rather than a window
+divider or a header line: it costs no row of height, and it draws
+where this panel begins instead of between every pair of windows on
+the frame."
+  :group 'herdr-panel)
+
 (defface herdr-panel-current
   '((((background dark)) :background "#313244" :extend t)
     (((background light)) :background "#ccd0da" :extend t)
@@ -271,6 +282,15 @@ without having to know what colours its fields chose."
     (open . herdr-panel-label)
     (closed . herdr-panel-unopened))
   "Face for a row's name at each degree of emphasis.")
+
+(defun herdr-panel-insert-title (title &optional border)
+  "Insert TITLE as this panel's heading.
+BORDER, when given, is a face ruling the heading off from whatever is
+above it; `herdr-panel-border' is the face meant for that."
+  (let ((start (point)))
+    (magit-insert-heading title)
+    (when border
+      (herdr-panel--add-face start (point) border 'beneath))))
 
 (defun herdr-panel-insert-entry (spec)
   "Insert one panel entry described by SPEC.
@@ -645,8 +665,13 @@ leaves `display-buffer' to go on looking."
     (set-window-buffer window buffer)
     window))
 
-(defun herdr-panel-open-pane (pane)
+(defun herdr-panel-open-pane (pane &optional access)
   "Show the terminal for PANE and move to it.
+ACCESS is `control' to open a terminal that takes what is typed at it,
+and `observe' or nil to open one that only shows the pane.  Only one
+client at a time holds control of a pane, so a panel visiting a row
+observes: browsing a list of panes is not a reason to take control of
+each in turn.
 The terminal replaces whatever the main window held, rather than
 splitting or taking over the panel: a panel is furniture, and a layout
 that rearranged itself every time a row was visited would be worse
@@ -658,7 +683,7 @@ visited, because that highlight follows the selected window."
   (require 'herdr-term)
   (let ((display-buffer-overriding-action
          '((herdr-panel--display-in-main))))
-    (herdr-term-open pane))
+    (herdr-term-open pane (eq access 'control)))
   (when-let* ((buffer (seq-find (lambda (buffer)
                                   (equal (herdr-panel--buffer-pane buffer)
                                          pane))

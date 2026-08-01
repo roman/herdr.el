@@ -129,7 +129,7 @@ windows does not have to undo a `pop-to-buffer' first."
   (with-current-buffer (get-buffer-create herdr-spaces-buffer-name)
     (herdr-panel-with-redraw
       (magit-insert-section (herdr-spaces-root)
-        (magit-insert-heading "Spaces")
+        (herdr-panel-insert-title "Spaces")
         (let ((spaces (herdr-session-spaces))
               (current (herdr-spaces--current-workspace)))
           (if spaces

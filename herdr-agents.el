@@ -51,6 +51,14 @@
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-agents-border t
+  "Whether to rule the agents panel off from the panel above it.
+The two panels share a column with no mode line between them, so
+without a rule they read as one list under two headings."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'boolean)
+
 (defcustom herdr-agents-separator "›"
   "What stands between a workspace and the window inside it."
   :package-version '(herdr . "0.1.0")
@@ -130,7 +138,8 @@ windows does not have to undo a `pop-to-buffer' first."
   (with-current-buffer (get-buffer-create herdr-agents-buffer-name)
     (herdr-panel-with-redraw
       (magit-insert-section (herdr-agents-root)
-        (magit-insert-heading "Agents")
+        (herdr-panel-insert-title
+         "Agents" (and herdr-agents-border 'herdr-panel-border))
         (let ((agents (herdr-agents--sorted))
               (current (herdr-panel-current-pane)))
           (if agents

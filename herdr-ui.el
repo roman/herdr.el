@@ -71,9 +71,11 @@
   :group 'herdr-panel
   :type 'natnum)
 
-(defcustom herdr-ui-spaces-height 0.4
+(defcustom herdr-ui-spaces-height 0.6
   "Share of the panel column given to the spaces panel.
-The agents panel takes what is left."
+The agents panel takes what is left.  Spaces gets the larger share
+because it lists every workspace, while agents lists only the panes
+herdr found one running in."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
   :type 'number)
@@ -118,7 +120,11 @@ a prefix argument, PANE is read with completion."
     ;; asked for here.
     (herdr-ui--clear)
     (delete-other-windows)
-    (herdr-panel-open-pane pane)
+    ;; With control, because this is the terminal the layout is built
+    ;; around and one that ignored what was typed at it would be a
+    ;; puzzle rather than a terminal.  A panel visiting a row still
+    ;; observes; only one client at a time may hold a pane.
+    (herdr-panel-open-pane pane 'control)
     (herdr-ui--show-panels)
     (when-let* ((buffer (herdr-ui--terminal-buffer pane)))
       (with-current-buffer buffer
