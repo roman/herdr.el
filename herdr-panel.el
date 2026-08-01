@@ -240,14 +240,142 @@ construct to choose your own."
 (defvar-local herdr-panel-refresh-function nil
   "Function redrawing this panel, or nil in a buffer that is not one.")
 
-(defun herdr-panel-init (refresh)
-  "Prepare the current buffer as a panel that REFRESH redraws."
-  (setq herdr-panel-refresh-function refresh)
+(defvar-local herdr-panel-pane-function nil
+  "Function returning the pane the row at point stands for.
+It may signal a `user-error' when the row stands for none.")
+
+(defun herdr-panel-init (refresh pane)
+  "Prepare the current buffer as a panel.
+REFRESH redraws it and PANE answers which pane the row at point
+stands for."
+  (setq herdr-panel-refresh-function refresh
+        herdr-panel-pane-function pane)
   (setq-local mode-line-format
               (if (eq herdr-panel-mode-line 'mode-line-format)
                   (default-value 'mode-line-format)
                 herdr-panel-mode-line))
   (add-hook 'kill-buffer-hook #'herdr-panel-unwatch nil t))
+
+;;; Moving Between Rows
+
+;; Only the rows stand for something; the title above them does not, and
+;; a cursor that can rest on it can be told to visit nothing.  Every row
+;; is a section carrying a value, and the titles are the sections that
+;; carry none, so that distinction is the whole test.
+
+(defun herdr-panel-row-p ()
+  "Return non-nil when point is on a row that stands for something."
+  (let ((section (magit-current-section)))
+    (and section (oref section value) t)))
+
+(defun herdr-panel--step (direction)
+  "Move point one row in DIRECTION, or return nil having not moved."
+  (let ((origin (point)))
+    (beginning-of-line)
+    (while (and (zerop (forward-line direction))
+                (not (herdr-panel-row-p))
+                (if (> direction 0) (not (eobp)) (not (bobp)))))
+    (cond
+      ((herdr-panel-row-p) (beginning-of-line) t)
+      (t (goto-char origin) nil))))
+
+(defun herdr-panel-next-row (&optional count)
+  "Move down COUNT rows, passing over anything that is not one."
+  (interactive "p")
+  (dotimes (_ (or count 1))
+    (herdr-panel--step 1)))
+
+(defun herdr-panel-previous-row (&optional count)
+  "Move up COUNT rows, passing over anything that is not one."
+  (interactive "p")
+  (dotimes (_ (or count 1))
+    (herdr-panel--step -1)))
+
+(defun herdr-panel-first-row ()
+  "Move to the first row."
+  (interactive)
+  (goto-char (point-min))
+  (unless (herdr-panel-row-p)
+    (herdr-panel--step 1)))
+
+(defun herdr-panel-last-row ()
+  "Move to the last row."
+  (interactive)
+  (goto-char (point-max))
+  (unless (herdr-panel-row-p)
+    (herdr-panel--step -1)))
+
+(defun herdr-panel-settle-point ()
+  "Put point on a row, when a redraw has left it somewhere else.
+Each window showing the panel is settled too.  A displayed buffer
+keeps a point per window, and that is the one a reader arrives on, so
+settling only the buffer's own leaves the cursor on the title of every
+window that was not selected at the time."
+  (unless (herdr-panel-row-p)
+    (or (herdr-panel--step 1) (herdr-panel--step -1)))
+  (dolist (window (get-buffer-window-list nil nil t))
+    (unless (save-excursion
+              (goto-char (window-point window))
+              (herdr-panel-row-p))
+      (set-window-point window (point)))))
+
+;;; Acting on a Row
+
+(defun herdr-panel-visit ()
+  "Show the terminal for the row at point."
+  (interactive)
+  (unless herdr-panel-pane-function
+    (user-error "Not in a herdr panel"))
+  (herdr-panel-open-pane (funcall herdr-panel-pane-function)))
+
+(defun herdr-panel-refresh ()
+  "Redraw this panel now."
+  (interactive)
+  (unless herdr-panel-refresh-function
+    (user-error "Not in a herdr panel"))
+  (funcall herdr-panel-refresh-function))
+
+;;; Keys
+
+(defvar-keymap herdr-panel-mode-map
+  :doc "Keymap shared by the herdr panels."
+  :parent magit-section-mode-map
+  "RET" #'herdr-panel-visit
+  "n" #'herdr-panel-next-row
+  "p" #'herdr-panel-previous-row
+  "<down>" #'herdr-panel-next-row
+  "<up>" #'herdr-panel-previous-row
+  "g" #'herdr-panel-refresh
+  "q" #'quit-window)
+
+(defconst herdr-panel-evil-blocked-keys
+  '("i" "I" "a" "A" "o" "O" "c" "C" "s" "S" "R" "x" "d" "p" "P" "u")
+  "Normal state keys that a panel refuses.
+A panel shows a list that herdr owns.  Nothing here can be typed into
+or edited, and a key that silently enters insert state leaves the next
+keystroke doing nothing anyone asked for.")
+
+(defun herdr-panel-install-evil-keys (map)
+  "Give MAP the panel's normal state bindings.
+evil's own normal state map shadows a major mode map, so a panel that
+binds only the latter appears to have no keys at all under evil."
+  (when (fboundp 'evil-define-key*)
+    (apply #'evil-define-key* 'normal map
+           (append
+            (list (kbd "RET") #'herdr-panel-visit
+                  "j" #'herdr-panel-next-row
+                  "k" #'herdr-panel-previous-row
+                  "n" #'herdr-panel-next-row
+                  "p" #'herdr-panel-previous-row
+                  (kbd "<down>") #'herdr-panel-next-row
+                  (kbd "<up>") #'herdr-panel-previous-row
+                  "gg" #'herdr-panel-first-row
+                  "G" #'herdr-panel-last-row
+                  "gr" #'herdr-panel-refresh
+                  (kbd "TAB") #'magit-section-toggle
+                  "q" #'quit-window)
+            (mapcan (lambda (key) (list key #'ignore))
+                    herdr-panel-evil-blocked-keys)))))
 
 (defun herdr-panel-own-buffer-p (buffer)
   "Return non-nil when BUFFER is part of the herdr interface.

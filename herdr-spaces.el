@@ -38,6 +38,7 @@
 ;;; Code:
 
 (require 'magit-section)
+(require 'seq)
 
 (require 'herdr-panel)
 (require 'herdr-session)
@@ -54,16 +55,17 @@
 
 (defvar-keymap herdr-spaces-mode-map
   :doc "Keymap for `herdr-spaces-mode'."
-  :parent magit-section-mode-map
-  "RET" #'herdr-spaces-visit
-  "g" #'herdr-spaces-refresh)
+  :parent herdr-panel-mode-map)
+
+(with-eval-after-load 'evil
+  (herdr-panel-install-evil-keys herdr-spaces-mode-map))
 
 ;;; Mode
 
 (define-derived-mode herdr-spaces-mode magit-section-mode "Herdr Spaces"
   "Major mode for the herdr spaces panel."
   :interactive nil
-  (herdr-panel-init #'herdr-spaces-refresh))
+  (herdr-panel-init #'herdr-spaces-refresh #'herdr-spaces--pane-at-point))
 
 ;;; Commands
 
@@ -98,12 +100,8 @@ windows does not have to undo a `pop-to-buffer' first."
               (dolist (space spaces)
                 (herdr-spaces--insert space current))
             (insert (propertize "  no spaces\n"
-                                'face 'herdr-panel-unknown))))))))
-
-(defun herdr-spaces-visit ()
-  "Show a terminal for the workspace at point."
-  (interactive)
-  (herdr-panel-open-pane (herdr-spaces--pane-at-point)))
+                                'face 'herdr-panel-unknown))))))
+    (herdr-panel-settle-point)))
 
 ;;; Rendering
 
@@ -151,19 +149,30 @@ would not say which checkout of the repository a row is."
 
 (defun herdr-spaces--pane-at-point ()
   "Return a pane to visit for the row at point.
-A workspace row offers the pane of its active tab, which is the one
-herdr would show when the workspace is focused."
+A workspace offers the pane of its active tab, which is the one herdr
+shows when that workspace is focused.  A space offers the same for its
+first member, so that a group heading leads somewhere rather than
+refusing."
   (let* ((section (magit-current-section))
          (type (and section (oref section type)))
-         (id (and section (oref section value))))
-    (unless (eq type 'herdr-workspace)
+         (value (and section (oref section value)))
+         (workspace (pcase type
+                      ('herdr-workspace (herdr-session-workspace value))
+                      ('herdr-space (car (herdr-spaces--members value))))))
+    (unless workspace
       (user-error "No workspace at point"))
-    (let* ((workspace (herdr-session-workspace id))
-           (tab (and workspace (gethash "active_tab_id" workspace)))
+    (let* ((tab (gethash "active_tab_id" workspace))
            (pane (car (herdr-session-panes tab))))
       (unless pane
-        (user-error "Workspace %s has no pane" id))
+        (user-error "Workspace %s has no pane"
+                    (gethash "workspace_id" workspace)))
       (gethash "pane_id" pane))))
+
+(defun herdr-spaces--members (key)
+  "Return the workspaces of the space called KEY."
+  (plist-get (seq-find (lambda (space) (equal (plist-get space :key) key))
+                       (herdr-session-spaces))
+             :workspaces))
 
 ;;; _
 (provide 'herdr-spaces)

@@ -55,16 +55,17 @@
 
 (defvar-keymap herdr-agents-mode-map
   :doc "Keymap for `herdr-agents-mode'."
-  :parent magit-section-mode-map
-  "RET" #'herdr-agents-visit
-  "g" #'herdr-agents-refresh)
+  :parent herdr-panel-mode-map)
+
+(with-eval-after-load 'evil
+  (herdr-panel-install-evil-keys herdr-agents-mode-map))
 
 ;;; Mode
 
 (define-derived-mode herdr-agents-mode magit-section-mode "Herdr Agents"
   "Major mode for the herdr agents panel."
   :interactive nil
-  (herdr-panel-init #'herdr-agents-refresh))
+  (herdr-panel-init #'herdr-agents-refresh #'herdr-agents--pane-at-point))
 
 ;;; Commands
 
@@ -99,12 +100,8 @@ windows does not have to undo a `pop-to-buffer' first."
               (dolist (agent agents)
                 (herdr-agents--insert agent current))
             (insert (propertize "  no agents detected\n"
-                                'face 'herdr-panel-unknown))))))))
-
-(defun herdr-agents-visit ()
-  "Show the terminal of the agent at point."
-  (interactive)
-  (herdr-panel-open-pane (herdr-agents--pane-at-point)))
+                                'face 'herdr-panel-unknown))))))
+    (herdr-panel-settle-point)))
 
 ;;; Rendering
 
