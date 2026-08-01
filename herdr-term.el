@@ -161,11 +161,32 @@ which makes it the record of whether that connection ever synced.")
   :doc "Keymap for `herdr-term-command-mode'."
   "C-c C-l" #'herdr-term-resync
   "C-c C-k" #'herdr-term-close
+  "C-c C-w" #'herdr-term-take-control
   "C-c C-e" #'herdr-term-scroll-to-bottom
   "S-<prior>" #'herdr-term-scroll-page-up
   "S-<next>" #'herdr-term-scroll-page-down
   "<wheel-up>" #'herdr-term-scroll-up
   "<wheel-down>" #'herdr-term-scroll-down)
+
+(declare-function evil-define-key* "evil-core"
+                  (state keymap key def &rest bindings))
+
+;; Only in normal state: insert state is where keys reach the program, so
+;; binding a motion there would swallow it.  These are state bindings on
+;; the minor mode's own map rather than on `ghostel-mode-map', so they
+;; disappear with the mode and cannot outlive a herdr buffer.
+(with-eval-after-load 'evil
+  (evil-define-key* 'normal herdr-term-command-mode-map
+                    "j" #'herdr-term-line-down
+                    "k" #'herdr-term-line-up
+                    (kbd "C-e") #'herdr-term-scroll-down
+                    (kbd "C-y") #'herdr-term-scroll-up
+                    (kbd "C-f") #'herdr-term-scroll-page-down
+                    (kbd "C-b") #'herdr-term-scroll-page-up
+                    (kbd "C-d") #'herdr-term-scroll-half-page-down
+                    (kbd "C-u") #'herdr-term-scroll-half-page-up
+                    "gg" #'herdr-term-scroll-to-top
+                    "G" #'herdr-term-scroll-to-bottom))
 
 ;;; Commands
 
@@ -247,6 +268,50 @@ The distance is `herdr-term-scroll-lines'."
   "Scroll this pane forward through its history by a screenful."
   (interactive)
   (herdr-term--scroll "down" (herdr-term--page-lines)))
+
+(defun herdr-term-scroll-half-page-up ()
+  "Scroll this pane back through its history by half a screenful."
+  (interactive)
+  (herdr-term--scroll "up" (max 1 (/ (herdr-term--page-lines) 2))))
+
+(defun herdr-term-scroll-half-page-down ()
+  "Scroll this pane forward through its history by half a screenful."
+  (interactive)
+  (herdr-term--scroll "down" (max 1 (/ (herdr-term--page-lines) 2))))
+
+(defun herdr-term-line-up ()
+  "Move up a line, scrolling the pane once the first one is reached.
+The buffer only ever holds the pane's viewport, so there is no earlier
+line to move onto; the pane has to bring one down instead."
+  (interactive)
+  (if (bobp)
+      (herdr-term--scroll "up" 1)
+    (forward-line -1)))
+
+(defun herdr-term-line-down ()
+  "Move down a line, scrolling the pane once the last one is reached.
+The buffer only ever holds the pane's viewport, so there is no later
+line to move onto; the pane has to bring one up instead."
+  (interactive)
+  (if (save-excursion (end-of-line) (eobp))
+      (herdr-term--scroll "down" 1)
+    (forward-line 1)))
+
+(defun herdr-term-scroll-to-top ()
+  "Show the start of this pane's history."
+  (interactive)
+  (herdr-term--scroll "up" herdr-term--scroll-limit))
+
+(defun herdr-term-take-control ()
+  "Reconnect this buffer's stream with control of its pane.
+Scrolling and input both need control, and herdr grants it to one
+client at a time, so this takes control from whoever holds it."
+  (interactive)
+  (when herdr-term--writable
+    (user-error "Buffer already controls %s" herdr-term--pane))
+  (setq herdr-term--writable t)
+  (message "herdr-term[%s]: taking control" herdr-term--pane)
+  (herdr-term-resync))
 
 (defun herdr-term-scroll-to-bottom ()
   "Return this pane to the end of its history.
@@ -592,8 +657,9 @@ herdr keeps no per-client viewport, which is also why an observing
 buffer cannot scroll at all: `terminal.scroll' is a control command,
 and only one client at a time holds control of a pane."
   (unless herdr-term--writable
-    (user-error "Buffer only observes %s; reopen it writable to scroll"
-                herdr-term--pane))
+    (user-error "Buffer only observes %s; %s takes control of it"
+                herdr-term--pane
+                (substitute-command-keys "\\[herdr-term-take-control]")))
   (unless (process-live-p herdr-term--process)
     (user-error "No live stream for %s" herdr-term--pane))
   (when (> lines 0)

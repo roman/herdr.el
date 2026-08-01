@@ -403,6 +403,51 @@ herdr then clamps to the real bottom."
       (should (equal (gethash "direction" command) "down"))
       (should (eql (gethash "lines" command) 65535)))))
 
+(ert-deftest herdr-term-line-down:scrolls-only-at-the-last-line ()
+  "Within the viewport a motion moves point; past it, the pane moves.
+The buffer holds the viewport and nothing else, so there is no later
+line for point to reach."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable t)
+    (let ((inhibit-read-only t))
+      (insert "one\ntwo\nthree"))
+    (goto-char (point-min))
+    (herdr-term-line-down)
+    (should (eql (line-number-at-pos) 2))
+    (should (null herdr-term-test-sent))
+    (goto-char (point-max))
+    (herdr-term-line-down)
+    (should (eql (line-number-at-pos) 3))
+    (let ((command (json-parse-string
+                    (string-trim-right (car herdr-term-test-sent)))))
+      (should (equal (gethash "direction" command) "down"))
+      (should (eql (gethash "lines" command) 1)))))
+
+(ert-deftest herdr-term-line-up:scrolls-only-at-the-first-line ()
+  "Point rises through the viewport, then the pane brings history down."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable t)
+    (let ((inhibit-read-only t))
+      (insert "one\ntwo\nthree"))
+    (goto-char (point-max))
+    (herdr-term-line-up)
+    (should (null herdr-term-test-sent))
+    (goto-char (point-min))
+    (herdr-term-line-up)
+    (let ((command (json-parse-string
+                    (string-trim-right (car herdr-term-test-sent)))))
+      (should (equal (gethash "direction" command) "up"))
+      (should (eql (gethash "lines" command) 1)))))
+
+(ert-deftest herdr-term-take-control:reconnects-with-control ()
+  "Taking control switches the stream, which only a reconnect can do."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable nil)
+    (herdr-term-take-control)
+    (should herdr-term--writable)
+    (should (eql herdr-term-test-streams 1))
+    (should-error (herdr-term-take-control) :type 'user-error)))
+
 (ert-deftest herdr-term-scroll:refuses-a-read-only-buffer ()
   "Scrolling is a control command, and an observer holds no control."
   (herdr-term-with-test-buffer
