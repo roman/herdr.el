@@ -1,8 +1,8 @@
 # herdr.el task runner
 
 emacs := env_var_or_default("EMACS", "emacs")
-lisp := "herdr-api.el herdr-term.el"
-tests := "test/herdr-api-tests.el test/herdr-term-tests.el"
+lisp := "herdr-api.el herdr-session.el herdr-term.el"
+tests := "test/herdr-api-tests.el test/herdr-session-tests.el test/herdr-term-tests.el"
 
 # List the available recipes
 default:
