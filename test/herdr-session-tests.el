@@ -228,6 +228,42 @@ none of them change anything a panel shows."
       (herdr-session-refresh t)
       (should (eql announcements 3)))))
 
+(ert-deftest herdr-session-start:polls-for-what-events-omit ()
+  "A poll runs alongside the events, because some changes have none.
+A shell changing directory renames its workspace and reports nothing,
+so a client listening only to events never learns."
+  (let ((herdr-session--poll-timer nil)
+        (herdr-session--subscription nil)
+        (herdr-session-poll-interval 0.05)
+        (refreshes 0))
+    (cl-letf (((symbol-function 'herdr-session-refresh)
+               (lambda (&rest _) (cl-incf refreshes)))
+              ((symbol-function 'herdr-api-subscribe)
+               (lambda (&rest _) nil)))
+      (unwind-protect
+          (progn
+            (herdr-session-start)
+            (should (timerp herdr-session--poll-timer))
+            (let ((before refreshes))
+              (dotimes (_ 30)
+                (when (eql refreshes before)
+                  (accept-process-output nil 0.02)))
+              (should (> refreshes before))))
+        (herdr-session-stop))
+      (should (null herdr-session--poll-timer)))))
+
+(ert-deftest herdr-session-start:honours-a-disabled-poll ()
+  "Polling can be turned off for a session that only wants events."
+  (let ((herdr-session--poll-timer nil)
+        (herdr-session--subscription nil)
+        (herdr-session-poll-interval nil))
+    (cl-letf (((symbol-function 'herdr-session-refresh) #'ignore)
+              ((symbol-function 'herdr-api-subscribe) (lambda (&rest _) nil)))
+      (unwind-protect
+          (progn (herdr-session-start)
+                 (should (null herdr-session--poll-timer)))
+        (herdr-session-stop)))))
+
 ;;; _
 (provide 'herdr-session-tests)
 ;; Local Variables:

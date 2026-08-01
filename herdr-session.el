@@ -66,6 +66,22 @@ otherwise cost a snapshot."
   :group 'herdr-session
   :type 'number)
 
+(defcustom herdr-session-poll-interval 5
+  "Seconds between snapshots taken without an event asking for one.
+Some of what the panels show changes with no event to announce it.  A
+workspace label is derived from the working directory of its root
+pane, and a shell changing directory reports nothing at all: herdr
+recomputes the label, and a client listening only to events goes on
+showing the old one for as long as the session lasts.
+
+The cost of the poll is one short connection, and a snapshot that
+changes nothing visible is dropped before any panel redraws, so a
+quiet session costs nothing but the request.  Set this to nil to
+listen to events alone."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-session
+  :type '(choice (const :tag "Do not poll" nil) number))
+
 (defcustom herdr-session-events
   '("workspace.created" "workspace.updated" "workspace.renamed"
     "workspace.moved" "workspace.reordered" "workspace.closed"
@@ -101,6 +117,9 @@ filter, so a function on it may call the herdr API.")
 (defvar herdr-session--timer nil
   "Timer of a pending refresh, or nil when none is due.")
 
+(defvar herdr-session--poll-timer nil
+  "Repeating timer taking the snapshots no event asks for.")
+
 (defvar herdr-session--closed-reason nil
   "Why the event subscription ended, or nil while it is healthy.")
 
@@ -119,15 +138,22 @@ after the server was restarted."
         (herdr-api-subscribe herdr-session-events
                              #'herdr-session--note-event
                              #'herdr-session--note-closed))
+  (when herdr-session-poll-interval
+    (setq herdr-session--poll-timer
+          (run-at-time herdr-session-poll-interval
+                       herdr-session-poll-interval
+                       #'herdr-session--refresh-quietly)))
   herdr-session--subscription)
 
 ;;;###autoload
 (defun herdr-session-stop ()
   "Stop tracking the session tree and forget it."
   (interactive)
-  (when herdr-session--timer
-    (cancel-timer herdr-session--timer))
-  (setq herdr-session--timer nil)
+  (dolist (timer (list herdr-session--timer herdr-session--poll-timer))
+    (when (timerp timer)
+      (cancel-timer timer)))
+  (setq herdr-session--timer nil
+        herdr-session--poll-timer nil)
   (herdr-api-unsubscribe herdr-session--subscription)
   (setq herdr-session--subscription nil))
 
@@ -196,6 +222,12 @@ until it timed out."
 (defun herdr-session--refresh-now ()
   "Run a deferred refresh, keeping a failure from killing the timer."
   (setq herdr-session--timer nil)
+  (herdr-session--refresh-quietly))
+
+(defun herdr-session--refresh-quietly ()
+  "Refresh, keeping a failure from stopping the timer that asked.
+A server that went away must not leave a repeating timer signalling
+once an interval for as long as Emacs runs."
   (with-demoted-errors "herdr-session refresh: %S"
     (herdr-session-refresh)))
 
