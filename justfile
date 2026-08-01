@@ -1,7 +1,7 @@
 # herdr.el task runner
 
 emacs := env_var_or_default("EMACS", "emacs")
-lisp := "herdr-api.el herdr-session.el herdr-term.el"
+lisp := "herdr-api.el herdr-session.el herdr-panel.el herdr-agents.el herdr-spaces.el herdr-term.el herdr-ui.el"
 tests := "test/herdr-api-tests.el test/herdr-session-tests.el test/herdr-term-tests.el"
 
 # List the available recipes
@@ -94,7 +94,7 @@ _load-path:
         exit 0
     fi
     echo "-L . $({{ emacs }} -Q --batch -f package-initialize --eval '
-      (dolist (lib (list "ghostel"))
+      (dolist (lib (list "ghostel" "magit-section"))
         (let ((file (locate-library lib)))
           (unless file
             (error "Cannot locate %s; set EMACS_LOAD_PATH" lib))
