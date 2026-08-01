@@ -63,8 +63,7 @@
 (define-derived-mode herdr-spaces-mode magit-section-mode "Herdr Spaces"
   "Major mode for the herdr spaces panel."
   :interactive nil
-  (setq herdr-panel-refresh-function #'herdr-spaces-refresh)
-  (add-hook 'kill-buffer-hook #'herdr-panel-unwatch nil t))
+  (herdr-panel-init #'herdr-spaces-refresh))
 
 ;;; Commands
 

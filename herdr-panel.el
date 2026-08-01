@@ -226,8 +226,28 @@ inside a panel rather than clearing it."
 
 ;;; Panels
 
+(defcustom herdr-panel-mode-line nil
+  "Mode line for a panel buffer, or nil to give it none.
+A panel is a narrow column of short rows in a window that never
+changes what it holds, so a mode line spends a line of height saying
+what the buffer name already says.  Set this to the symbol
+`mode-line-format' to get the ordinary one back, or to any mode line
+construct to choose your own."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(choice (const :tag "None" nil) sexp))
+
 (defvar-local herdr-panel-refresh-function nil
   "Function redrawing this panel, or nil in a buffer that is not one.")
+
+(defun herdr-panel-init (refresh)
+  "Prepare the current buffer as a panel that REFRESH redraws."
+  (setq herdr-panel-refresh-function refresh)
+  (setq-local mode-line-format
+              (if (eq herdr-panel-mode-line 'mode-line-format)
+                  (default-value 'mode-line-format)
+                herdr-panel-mode-line))
+  (add-hook 'kill-buffer-hook #'herdr-panel-unwatch nil t))
 
 (defun herdr-panel-own-buffer-p (buffer)
   "Return non-nil when BUFFER is part of the herdr interface.
@@ -291,10 +311,47 @@ event somewhere else does not move what the reader is looking at."
        (when-let* ((window (get-buffer-window)))
          (set-window-start window (min ,start (point-max)) t)))))
 
+(defun herdr-panel-main-window (&optional frame)
+  "Return the window on FRAME that the panels send terminals to.
+A window already mirroring a pane wins, so a layout keeps showing its
+terminals in the same place.  Failing that, any window that is not one
+of the side windows the panels themselves live in."
+  (let ((windows (seq-remove (lambda (window)
+                               (window-parameter window 'window-side))
+                             (window-list frame))))
+    (or (seq-find (lambda (window)
+                    (herdr-panel--buffer-pane (window-buffer window)))
+                  windows)
+        (car windows))))
+
+(defun herdr-panel--display-in-main (buffer _alist)
+  "Show BUFFER in the main window, for `display-buffer'.
+Return that window, or nil when the frame has none to offer, which
+leaves `display-buffer' to go on looking."
+  (when-let* ((window (herdr-panel-main-window)))
+    (set-window-buffer window buffer)
+    window))
+
 (defun herdr-panel-open-pane (pane)
-  "Show the terminal for PANE, creating its buffer when there is none."
+  "Show the terminal for PANE and move to it.
+The terminal replaces whatever the main window held, rather than
+splitting or taking over the panel: a panel is furniture, and a layout
+that rearranged itself every time a row was visited would be worse
+than one window showing one pane.
+
+Selecting the terminal is what herdr does when a row is activated, and
+here it also moves the panels' own highlight onto the row just
+visited, because that highlight follows the selected window."
   (require 'herdr-term)
-  (herdr-term-open pane))
+  (let ((display-buffer-overriding-action
+         '((herdr-panel--display-in-main))))
+    (herdr-term-open pane))
+  (when-let* ((buffer (seq-find (lambda (buffer)
+                                  (equal (herdr-panel--buffer-pane buffer)
+                                         pane))
+                                (buffer-list)))
+              (window (get-buffer-window buffer)))
+    (select-window window)))
 
 ;;; _
 (provide 'herdr-panel)

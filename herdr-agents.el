@@ -64,8 +64,7 @@
 (define-derived-mode herdr-agents-mode magit-section-mode "Herdr Agents"
   "Major mode for the herdr agents panel."
   :interactive nil
-  (setq herdr-panel-refresh-function #'herdr-agents-refresh)
-  (add-hook 'kill-buffer-hook #'herdr-panel-unwatch nil t))
+  (herdr-panel-init #'herdr-agents-refresh))
 
 ;;; Commands
 
