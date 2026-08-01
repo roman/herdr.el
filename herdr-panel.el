@@ -110,7 +110,65 @@ open here from what is merely running over there."
 
 (defface herdr-panel-detail
   '((t :inherit herdr-panel-unknown))
-  "Face for the trailing detail on a row, such as a terminal title."
+  "Face for text on an entry that no more particular face claims."
+  :group 'herdr-panel)
+
+;; A field gets its own colour so that a glance can find one kind of
+;; thing among the rest: the branch, the path, the count that is not
+;; zero.  All of it gives way on a closed entry, where the point is that
+;; the whole thing recedes.
+
+(defface herdr-panel-path
+  '((((background dark)) :foreground "#7f849c")
+    (((background light)) :foreground "#8c8fa1")
+    (t :inherit shadow))
+  "Face for the directory a workspace sits in."
+  :group 'herdr-panel)
+
+(defface herdr-panel-branch
+  '((((background dark)) :foreground "#cba6f7")
+    (((background light)) :foreground "#8839ef")
+    (t :inherit font-lock-keyword-face))
+  "Face for a git branch.  This is the colour herdr gives one."
+  :group 'herdr-panel)
+
+(defface herdr-panel-ahead
+  '((((background dark)) :foreground "#a6e3a1")
+    (((background light)) :foreground "#40a043")
+    (t :inherit success))
+  "Face for how far a checkout is ahead of its upstream."
+  :group 'herdr-panel)
+
+(defface herdr-panel-behind
+  '((((background dark)) :foreground "#fab387")
+    (((background light)) :foreground "#fe640b")
+    (t :inherit warning))
+  "Face for how far a checkout is behind its upstream."
+  :group 'herdr-panel)
+
+(defface herdr-panel-dirty
+  '((((background dark)) :foreground "#f9e2af")
+    (((background light)) :foreground "#df8e1d")
+    (t :inherit warning))
+  "Face for the count of files changed in a checkout."
+  :group 'herdr-panel)
+
+(defface herdr-panel-agent
+  '((((background dark)) :foreground "#94e2d5")
+    (((background light)) :foreground "#179299")
+    (t :inherit font-lock-type-face))
+  "Face for what kind of agent an entry is running."
+  :group 'herdr-panel)
+
+(defface herdr-panel-window
+  '((((background dark)) :foreground "#89b4fa")
+    (((background light)) :foreground "#1e66f5"))
+  "Face for the window a pane sits in within its workspace."
+  :group 'herdr-panel)
+
+(defface herdr-panel-separator
+  '((t :inherit herdr-panel-unknown))
+  "Face for the punctuation between fields."
   :group 'herdr-panel)
 
 (defface herdr-panel-current
@@ -167,20 +225,31 @@ there is no agent at all."
 ;; row propertized with `face' alone renders correctly once and then loses
 ;; its colour with no error to explain it.
 
-(defun herdr-panel--propertize (string face)
-  "Return STRING wearing FACE, in a way font-lock will not undo."
+(defun herdr-panel-text (string face)
+  "Return STRING wearing FACE, in a way font-lock will not undo.
+Panels use this for each field they draw, so that a field keeps its
+own colour when a face is later merged across the whole entry."
   (propertize string 'face face 'font-lock-face face))
 
-(defun herdr-panel--add-face (beg end face)
-  "Merge FACE beneath whatever BEG to END already wears."
-  (add-face-text-property beg end face t)
-  (let ((pos beg))
-    (while (< pos end)
-      (let ((next (next-single-property-change pos 'font-lock-face nil end))
-            (worn (ensure-list (get-text-property pos 'font-lock-face))))
-        (put-text-property pos next 'font-lock-face
-                           (append worn (list face)))
-        (setq pos next)))))
+(defalias 'herdr-panel--propertize #'herdr-panel-text)
+
+(defun herdr-panel--add-face (beg end face order)
+  "Merge FACE into BEG to END, ORDER saying which side wins.
+`beneath' leaves what is already there in charge, which is how a row
+fill supplies a background without touching any foreground.  `over'
+puts FACE in charge, which is how a whole entry is dimmed at once
+without having to know what colours its fields chose."
+  (let ((append (eq order 'beneath)))
+    (add-face-text-property beg end face append)
+    (let ((pos beg))
+      (while (< pos end)
+        (let ((next (next-single-property-change pos 'font-lock-face nil end))
+              (worn (ensure-list (get-text-property pos 'font-lock-face))))
+          (put-text-property pos next 'font-lock-face
+                             (if append
+                                 (append worn (list face))
+                               (cons face worn)))
+          (setq pos next))))))
 
 (defun herdr-panel-status-string (status)
   "Return STATUS's mark, wearing the face for that status."
@@ -219,19 +288,20 @@ whether or not they happen to have opened it."
          (detail (plist-get spec :detail))
          (aside (plist-get spec :aside))
          (indent (or (plist-get spec :indent) " "))
-         (faded (eq emphasis 'closed))
          (start (point)))
-    (insert indent
-            (herdr-panel-status-string (plist-get spec :status))
-            " "
-            (herdr-panel--propertize
-             (plist-get spec :label)
-             (or (cdr (assq emphasis herdr-panel-emphasis-faces))
-                 'herdr-panel-label)))
+    (insert indent (herdr-panel-status-string (plist-get spec :status)) " ")
+    ;; Beneath, because a label may already have coloured part of itself:
+    ;; an agent names its workspace and the window inside it, and those
+    ;; are two different things.
+    (herdr-panel--add-face
+     (point) (progn (insert (plist-get spec :label)) (point))
+     (or (cdr (assq emphasis herdr-panel-emphasis-faces))
+         'herdr-panel-label)
+     'beneath)
     (when (and aside (not (string-empty-p aside)))
-      (insert " " (herdr-panel--propertize
-                   aside (if faded 'herdr-panel-unopened
-                           'herdr-panel-detail))))
+      (insert " ")
+      (herdr-panel--add-face (point) (progn (insert aside) (point))
+                             'herdr-panel-detail 'beneath))
     (insert "\n")
     ;; Aligned under the name rather than under the mark, so a column of
     ;; entries reads as a column of names with notes beneath them.
@@ -239,16 +309,20 @@ whether or not they happen to have opened it."
       (dolist (line (ensure-list detail))
         (when (and line (not (string-empty-p line)))
           (insert margin)
-          (herdr-panel--add-face
-           (point)
-           (progn (insert line) (point))
-           (if faded 'herdr-panel-unopened 'herdr-panel-detail))
+          ;; Beneath, so a field that chose a colour keeps it and only
+          ;; the text that chose none falls back to this.
+          (herdr-panel--add-face (point) (progn (insert line) (point))
+                                 'herdr-panel-detail 'beneath)
           (insert "\n"))))
+    (when (eq emphasis 'closed)
+      ;; Over everything, because the point of a closed entry is that it
+      ;; recedes as a whole.  Merged beneath, each field would keep the
+      ;; colour that makes it stand out and nothing would recede.
+      (herdr-panel--add-face start (point) 'herdr-panel-unopened 'over))
     (when (eq emphasis 'current)
-      ;; Merged beneath, so that the mark and the name keep their own
-      ;; colours and only the background comes from here.  Replacing the
-      ;; face instead would flatten the entry to a single colour.
-      (herdr-panel--add-face start (point) 'herdr-panel-current))))
+      ;; Beneath, so that the mark and the fields keep their colours and
+      ;; only the background comes from here.
+      (herdr-panel--add-face start (point) 'herdr-panel-current 'beneath))))
 
 (defun herdr-panel-open-panes ()
   "Return the panes some Emacs buffer is mirroring, in no order."

@@ -184,10 +184,17 @@ large repository and is rarely what the count is wanted for."
          (setq changed (1+ changed)))))
     (when (and branch (not (equal branch "(detached)")))
       (string-join
-       (delq nil (list branch
-                       (and ahead (> ahead 0) (format "↑%d" ahead))
-                       (and behind (> behind 0) (format "↓%d" behind))
-                       (and (> changed 0) (format "*%d" changed))))
+       (delq nil
+             (list (herdr-panel-text branch 'herdr-panel-branch)
+                   (and ahead (> ahead 0)
+                        (herdr-panel-text (format "↑%d" ahead)
+                                          'herdr-panel-ahead))
+                   (and behind (> behind 0)
+                        (herdr-panel-text (format "↓%d" behind)
+                                          'herdr-panel-behind))
+                   (and (> changed 0)
+                        (herdr-panel-text (format "*%d" changed)
+                                          'herdr-panel-dirty))))
        " "))))
 
 ;;; Rendering
@@ -232,15 +239,20 @@ Where it sits, then what git makes of it.  The directory is where the
 name comes from and what tells two checkouts of the same basename
 apart; the branch and the counts are what herdr shows on a space and
 does not put on the wire."
-  (let ((directory (herdr-spaces--directory workspace)))
+  (let* ((directory (herdr-spaces--directory workspace))
+         (separator (herdr-panel-text (concat " " herdr-spaces-separator " ")
+                                      'herdr-panel-separator)))
     (list (string-join
-           (delq nil (list (and directory (abbreviate-file-name directory))
-                           (herdr-spaces--windows workspace)))
-           (concat " " herdr-spaces-separator " "))
+           (delq nil
+                 (list (and directory
+                            (herdr-panel-text (abbreviate-file-name directory)
+                                              'herdr-panel-path))
+                       (herdr-spaces--windows workspace)))
+           separator)
           (string-join
            (delq nil (list (herdr-spaces--git directory)
                            (herdr-spaces--branch workspace)))
-           (concat " " herdr-spaces-separator " ")))))
+           separator))))
 
 (defun herdr-spaces--directory (workspace)
   "Return the directory WORKSPACE's root pane sits in, or nil."
@@ -253,7 +265,8 @@ does not put on the wire."
 A count of one is what every workspace starts with and so says
 nothing."
   (let ((tabs (gethash "tab_count" workspace)))
-    (and tabs (> tabs 1) (format "%d windows" tabs))))
+    (and tabs (> tabs 1)
+         (herdr-panel-text (format "%d windows" tabs) 'herdr-panel-window))))
 
 (defun herdr-spaces--emphasis (workspace-id current)
   "Return how to draw WORKSPACE-ID, given the CURRENT workspace.
@@ -273,8 +286,10 @@ herdr shows this beside a grouped workspace, where the label alone
 would not say which checkout of the repository a row is."
   (when-let* ((worktree (gethash "worktree" workspace))
               ((gethash "is_linked_worktree" worktree)))
-    (file-name-nondirectory
-     (directory-file-name (gethash "checkout_path" worktree)))))
+    (herdr-panel-text
+     (file-name-nondirectory
+      (directory-file-name (gethash "checkout_path" worktree)))
+     'herdr-panel-path)))
 
 (defun herdr-spaces--pane-at-point ()
   "Return a pane to visit for the row at point.

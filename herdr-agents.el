@@ -160,7 +160,12 @@ would be a number that never changes and never distinguishes."
                    (gethash "label" workspace)
                  (gethash "workspace_id" agent)))
          (tab (herdr-agents--tab agent)))
-    (if tab (concat name " " herdr-agents-separator " " tab) name)))
+    (if tab
+        (concat name
+                (herdr-panel-text (concat " " herdr-agents-separator " ")
+                                  'herdr-panel-separator)
+                (herdr-panel-text tab 'herdr-panel-window))
+      name)))
 
 (defun herdr-agents--tab (agent)
   "Return the name of the window AGENT sits in, or nil when it is alone."
@@ -178,7 +183,8 @@ would be a number that never changes and never distinguishes."
 See `herdr-agents-icons' for which kinds have a glyph."
   (when-let* ((kind (or (gethash "agent" agent)
                         (gethash "display_agent" agent))))
-    (or (cdr (assoc kind herdr-agents-icons)) kind)))
+    (herdr-panel-text (or (cdr (assoc kind herdr-agents-icons)) kind)
+                      'herdr-panel-agent)))
 
 (defun herdr-agents--name (agent)
   "Return what to call AGENT.
