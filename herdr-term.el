@@ -101,6 +101,14 @@ same amount whether it is scrolled from Emacs or from the herdr TUI."
   :group 'herdr-term
   :type 'natnum)
 
+(defcustom herdr-term-resize-delay 0.2
+  "Seconds to wait for a window to settle before resizing its pane.
+Dragging a window edge reports every intermediate size, and each would
+otherwise cost a resize and the full repaint that follows it."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-term
+  :type 'number)
+
 (defcustom herdr-term-max-connect-attempts 3
   "How many times to retry a stream that exits without ever syncing.
 This bounds recovery for a pane id that is invalid or has vanished,
@@ -152,6 +160,9 @@ which makes it the record of whether that connection ever synced.")
 (defvar-local herdr-term--input-bridge nil
   "Process forwarding ghostel's PTY writes to the control stream.")
 
+(defvar-local herdr-term--resize-timer nil
+  "Timer of a pending resize, or nil when none is due.")
+
 ;;; Keymaps
 
 ;; The shifted page keys are what a terminal emulator conventionally uses
@@ -170,12 +181,26 @@ which makes it the record of whether that connection ever synced.")
 
 (declare-function evil-define-key* "evil-core"
                   (state keymap key def &rest bindings))
+(declare-function ghostel--send-event "ghostel" ())
+
+(defconst herdr-term-evil-passthrough-keys
+  '("DEL" "<backspace>" "C-a" "C-d" "C-e" "C-k" "C-n" "C-p"
+    "C-q" "C-r" "C-t" "C-v" "C-w")
+  "Keys insert state must hand to the program rather than act on.
+evil binds these for editing a buffer, and its state maps outrank both
+the major and the minor mode maps, so ghostel never sees them: in a
+terminal that makes backspace do nothing and takes the shell's own
+line editing away.  `C-o' and `C-z' are deliberately left to evil, as
+the way back out of a terminal that has the keyboard.")
 
 ;; Only in normal state: insert state is where keys reach the program, so
 ;; binding a motion there would swallow it.  These are state bindings on
 ;; the minor mode's own map rather than on `ghostel-mode-map', so they
 ;; disappear with the mode and cannot outlive a herdr buffer.
 (with-eval-after-load 'evil
+  (apply #'evil-define-key* 'insert herdr-term-command-mode-map
+         (mapcan (lambda (key) (list (kbd key) #'ghostel--send-event))
+                 herdr-term-evil-passthrough-keys))
   (evil-define-key* 'normal herdr-term-command-mode-map
                     "j" #'herdr-term-line-down
                     "k" #'herdr-term-line-up
@@ -356,6 +381,7 @@ herdr's authoritative ones."
             herdr-term--fail-count 0)
       (herdr-term--reset-term rows cols)
       (herdr-term-command-mode 1)
+      (add-hook 'window-size-change-functions #'herdr-term--note-resize nil t)
       (add-hook 'kill-buffer-hook #'herdr-term--teardown nil t)
       (herdr-term--start-stream buffer)))
   buffer)
@@ -364,6 +390,7 @@ herdr's authoritative ones."
   "Stop this buffer's stream, input bridge and pending reconnect."
   (herdr-term--kill-process)
   (herdr-term--cancel-reconnect)
+  (herdr-term--cancel-resize)
   (herdr-term--kill-input-bridge))
 
 ;;; Stream Lifecycle
@@ -564,6 +591,11 @@ the grid in a state only a new connection can resolve."
         (herdr-term--paint (base64-decode-string payload))
         (setq herdr-term--last-seq seq
               herdr-term--fail-count 0)
+        ;; A fresh connection arrives at herdr's idea of the pane, which
+        ;; is whatever its own client sized it to.  This is where the
+        ;; window gets to disagree, and the only place the stream is
+        ;; known to be up.
+        (herdr-term--fit-to-window)
         nil)
     (error (herdr-term--reconnect (format "full apply failed: %S" err))
            'resync)))
@@ -672,6 +704,66 @@ and only one client at a time holds control of a pane."
            ;; program as input, which the input bridge already does for
            ;; the unshifted keys.
            :source "wheel"))))
+
+;;; Fitting the Pane to its Window
+
+;; herdr owns the grid, so the window cannot simply resize it locally: the
+;; frames still arriving are sized for herdr's own idea of the pane, and a
+;; grid that disagrees renders them in the wrong places.  The window asks
+;; herdr to change size instead, and the frames that come back bring the
+;; new dimensions with them.
+
+(defun herdr-term--note-resize (frame)
+  "Fit every herdr pane shown on FRAME to the window showing it.
+Resolved from each window rather than from the current buffer, because
+redisplay runs this with an arbitrary buffer current."
+  (dolist (window (window-list frame))
+    (let ((buffer (window-buffer window)))
+      (when (buffer-local-value 'herdr-term--pane buffer)
+        (with-current-buffer buffer
+          (herdr-term--schedule-resize window))))))
+
+(defun herdr-term--fit-to-window ()
+  "Schedule a resize when this buffer's window and its grid disagree."
+  (when-let* ((window (get-buffer-window (current-buffer) t)))
+    (herdr-term--schedule-resize window)))
+
+(defun herdr-term--schedule-resize (window)
+  "Ask herdr to fit this buffer's pane to WINDOW, once it settles."
+  (let ((rows (max 1 (window-body-height window)))
+        (cols (max 1 (window-body-width window))))
+    (unless (or (and (eql rows herdr-term--rows) (eql cols herdr-term--cols))
+                (timerp herdr-term--resize-timer))
+      (setq herdr-term--resize-timer
+            (run-at-time herdr-term-resize-delay nil
+                         #'herdr-term--resize-now (current-buffer))))))
+
+(defun herdr-term--resize-now (buffer)
+  "Fit BUFFER's pane to the window showing it."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq herdr-term--resize-timer nil)
+      (when-let* ((window (get-buffer-window buffer t))
+                  (rows (max 1 (window-body-height window)))
+                  (cols (max 1 (window-body-width window)))
+                  ((not (and (eql rows herdr-term--rows)
+                             (eql cols herdr-term--cols)))))
+        (if (and herdr-term--writable
+                 (process-live-p herdr-term--process))
+            (herdr-term--send-command
+             (list :type "terminal.resize" :cols cols :rows rows))
+          ;; An observer holds no control of the pane and so cannot ask
+          ;; for a size.  A fresh connection can, because it names one,
+          ;; and the reconnect is what makes an observed pane fit at all.
+          (setq herdr-term--rows rows
+                herdr-term--cols cols)
+          (herdr-term--reconnect "window resized"))))))
+
+(defun herdr-term--cancel-resize ()
+  "Cancel this buffer's pending resize, if there is one."
+  (when (timerp herdr-term--resize-timer)
+    (cancel-timer herdr-term--resize-timer))
+  (setq herdr-term--resize-timer nil))
 
 ;;; Input
 
