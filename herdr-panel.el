@@ -51,28 +51,73 @@
   :group 'herdr-session
   :prefix "herdr-panel-")
 
-(defface herdr-panel-blocked '((t :inherit error :weight bold))
-  "Face for an agent waiting on the user."
+;; The colours are herdr's own, so that a pane looks the same whichever
+;; client is showing it.  They are the Catppuccin flavours herdr ships:
+;; Mocha where Emacs reports a dark background, Latte where it reports a
+;; light one.  Everything here is a face, so a theme that disagrees can
+;; say so without patching the panels.
+
+(defface herdr-panel-blocked
+  '((((background dark)) :foreground "#f38ba8")
+    (((background light)) :foreground "#d20f39")
+    (t :inherit error))
+  "Face for the mark of an agent waiting on the user."
   :group 'herdr-panel)
 
-(defface herdr-panel-done '((t :inherit success :weight bold))
-  "Face for an agent that finished work nobody has looked at yet."
+(defface herdr-panel-working
+  '((((background dark)) :foreground "#f9e2af")
+    (((background light)) :foreground "#df8e1d")
+    (t :inherit warning))
+  "Face for the mark of an agent that is working."
   :group 'herdr-panel)
 
-(defface herdr-panel-working '((t :inherit warning))
-  "Face for an agent that is working."
+(defface herdr-panel-done
+  '((((background dark)) :foreground "#94e2d5")
+    (((background light)) :foreground "#179299")
+    (t :inherit success))
+  "Face for the mark of an agent whose finished work nobody has seen."
   :group 'herdr-panel)
 
-(defface herdr-panel-idle '((t :inherit shadow))
-  "Face for an agent with nothing to report."
+(defface herdr-panel-idle
+  '((((background dark)) :foreground "#a6e3a1")
+    (((background light)) :foreground "#40a043")
+    (t :inherit success))
+  "Face for the mark of an agent with nothing to report."
   :group 'herdr-panel)
 
-(defface herdr-panel-unknown '((t :inherit shadow))
-  "Face for a pane herdr has detected no agent in."
+(defface herdr-panel-unknown
+  '((((background dark)) :foreground "#6c7086")
+    (((background light)) :foreground "#9ca0b0")
+    (t :inherit shadow))
+  "Face for the mark of a pane herdr has detected no agent in."
   :group 'herdr-panel)
 
-(defface herdr-panel-current '((t :inherit highlight :extend t))
-  "Face marking the row whose pane the selected window shows."
+(defface herdr-panel-label
+  '((((background dark)) :foreground "#a6adc8")
+    (((background light)) :foreground "#6c6f85")
+    (t :inherit default))
+  "Face for the name on a row that is not the current one."
+  :group 'herdr-panel)
+
+(defface herdr-panel-detail
+  '((t :inherit herdr-panel-unknown))
+  "Face for the trailing detail on a row, such as a terminal title."
+  :group 'herdr-panel)
+
+(defface herdr-panel-current
+  '((((background dark)) :background "#313244" :extend t)
+    (((background light)) :background "#ccd0da" :extend t)
+    (t :inherit highlight :extend t))
+  "Face filling the row whose pane the selected window shows.
+Only a background: the mark keeps its own colour, and the name is
+brightened by `herdr-panel-current-label' instead."
+  :group 'herdr-panel)
+
+(defface herdr-panel-current-label
+  '((((background dark)) :foreground "#cdd6f4" :weight bold)
+    (((background light)) :foreground "#4c4f69" :weight bold)
+    (t :weight bold))
+  "Face for the name on the current row."
   :group 'herdr-panel)
 
 (defconst herdr-panel-status-faces
@@ -84,11 +129,12 @@
   "Face for each agent status herdr reports.")
 
 (defcustom herdr-panel-status-symbols
-  '(("blocked" . "!") ("done" . "*") ("working" . ">")
-    ("idle" . "-") ("unknown" . " "))
+  '(("blocked" . "●") ("done" . "●") ("working" . "●")
+    ("idle" . "○") ("unknown" . "·"))
   "Mark shown beside each agent status.
-These are plain ASCII so that a panel stays readable in a terminal
-frame with no glyphs for anything better."
+These are herdr's own marks: a filled circle while an agent has
+something to say, a hollow one once it has been seen, and a dot where
+there is no agent at all."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
   :type '(alist :key-type string :value-type string))
@@ -101,10 +147,55 @@ frame with no glyphs for anything better."
   "Return the mark shown for agent STATUS."
   (or (cdr (assoc status herdr-panel-status-symbols)) " "))
 
+;; Both `face' and `font-lock-face' are set on everything a panel draws.
+;; A panel is a `magit-section-mode' buffer, and font-lock is on in one:
+;; the first refontification removes any `face' it did not put there, so a
+;; row propertized with `face' alone renders correctly once and then loses
+;; its colour with no error to explain it.
+
+(defun herdr-panel--propertize (string face)
+  "Return STRING wearing FACE, in a way font-lock will not undo."
+  (propertize string 'face face 'font-lock-face face))
+
+(defun herdr-panel--add-face (beg end face)
+  "Merge FACE beneath whatever BEG to END already wears."
+  (add-face-text-property beg end face t)
+  (let ((pos beg))
+    (while (< pos end)
+      (let ((next (next-single-property-change pos 'font-lock-face nil end))
+            (worn (ensure-list (get-text-property pos 'font-lock-face))))
+        (put-text-property pos next 'font-lock-face
+                           (append worn (list face)))
+        (setq pos next)))))
+
 (defun herdr-panel-status-string (status)
-  "Return STATUS's mark, propertized with its face."
-  (propertize (herdr-panel-status-symbol status)
-              'face (herdr-panel-status-face status)))
+  "Return STATUS's mark, wearing the face for that status."
+  (herdr-panel--propertize (herdr-panel-status-symbol status)
+                           (herdr-panel-status-face status)))
+
+(defun herdr-panel-insert-row (status label &optional detail indent current)
+  "Insert one panel row, the way herdr draws one.
+STATUS picks the mark and its colour, LABEL names the row and DETAIL
+trails it.  INDENT goes before the mark, for a row inside a group.
+
+Only the mark is coloured by the status; herdr leaves the name in one
+colour and lets the mark carry the state.  A non-nil CURRENT fills the
+whole row, which is how herdr shows the pane it is displaying."
+  (let ((start (point)))
+    (insert (or indent " ")
+            (herdr-panel-status-string status)
+            " "
+            (herdr-panel--propertize label (if current
+                                               'herdr-panel-current-label
+                                             'herdr-panel-label)))
+    (when (and detail (not (string-empty-p detail)))
+      (insert "  " (herdr-panel--propertize detail 'herdr-panel-detail)))
+    (insert "\n")
+    (when current
+      ;; Merged beneath, so that the mark and the name keep their own
+      ;; colours and only the background comes from here.  Replacing the
+      ;; face instead would flatten the row to a single colour.
+      (herdr-panel--add-face start (point) 'herdr-panel-current))))
 
 ;;; The Current Pane
 

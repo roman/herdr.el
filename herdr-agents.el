@@ -120,20 +120,14 @@ several agents share a status."
                (herdr-session-agents)))
 
 (defun herdr-agents--insert (agent current)
-  "Insert a row for AGENT, marked when its pane is CURRENT."
-  (let* ((pane (gethash "pane_id" agent))
-         (status (gethash "agent_status" agent))
-         (start (point)))
+  "Insert a row for AGENT, filled when its pane is CURRENT."
+  (let ((pane (gethash "pane_id" agent)))
     (magit-insert-section (herdr-agent pane)
-      (insert " " (herdr-panel-status-string status) " "
-              (propertize (herdr-agents--name agent)
-                          'face (herdr-panel-status-face status))
-              "  "
-              (propertize (or (gethash "terminal_title_stripped" agent) "")
-                          'face 'herdr-panel-idle)
-              "\n")
-      (when (equal pane current)
-        (put-text-property start (point) 'face 'herdr-panel-current)))))
+      (herdr-panel-insert-row (gethash "agent_status" agent)
+                              (herdr-agents--name agent)
+                              (gethash "terminal_title_stripped" agent)
+                              " "
+                              (equal pane current)))))
 
 (defun herdr-agents--name (agent)
   "Return what to call AGENT.

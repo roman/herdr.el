@@ -125,25 +125,30 @@ holds a single child."
           (magit-insert-heading
             (concat " " (herdr-panel-status-string
                          (plist-get space :agent-status))
-                    " " (propertize (plist-get space :label)
-                                    'face 'magit-section-heading)))
+                    " " (herdr-panel--propertize (plist-get space :label)
+                                                 'magit-section-heading)))
           (dolist (workspace workspaces)
             (herdr-spaces--insert-workspace workspace current t)))
       (herdr-spaces--insert-workspace (car workspaces) current nil))))
 
 (defun herdr-spaces--insert-workspace (workspace current indented)
-  "Insert WORKSPACE, marked when it is CURRENT and INDENTED under a space."
-  (let* ((id (gethash "workspace_id" workspace))
-         (status (gethash "agent_status" workspace))
-         (start (point)))
+  "Insert WORKSPACE, filled when it is CURRENT and INDENTED under a space."
+  (let ((id (gethash "workspace_id" workspace)))
     (magit-insert-section (herdr-workspace id)
-      (insert (if indented "   " " ")
-              (herdr-panel-status-string status) " "
-              (propertize (gethash "label" workspace)
-                          'face (herdr-panel-status-face status))
-              "\n")
-      (when (equal id current)
-        (put-text-property start (point) 'face 'herdr-panel-current)))))
+      (herdr-panel-insert-row (gethash "agent_status" workspace)
+                              (gethash "label" workspace)
+                              (herdr-spaces--branch workspace)
+                              (if indented "   " " ")
+                              (equal id current)))))
+
+(defun herdr-spaces--branch (workspace)
+  "Return the checkout WORKSPACE sits on, or nil when it is not a worktree.
+herdr shows this beside a grouped workspace, where the label alone
+would not say which checkout of the repository a row is."
+  (when-let* ((worktree (gethash "worktree" workspace))
+              ((gethash "is_linked_worktree" worktree)))
+    (file-name-nondirectory
+     (directory-file-name (gethash "checkout_path" worktree)))))
 
 (defun herdr-spaces--pane-at-point ()
   "Return a pane to visit for the row at point.
