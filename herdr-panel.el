@@ -404,6 +404,7 @@ inside a panel rather than clearing it."
 (defvar herdr-term--pane)
 (defvar herdr-term--writable)
 (declare-function herdr-term-open "herdr-term" (pane &optional writable))
+(declare-function herdr-term-take-control "herdr-term" ())
 
 ;;; Panels
 
@@ -420,6 +421,21 @@ construct to choose your own."
 
 (defvar-local herdr-panel-refresh-function nil
   "Function redrawing this panel, or nil in a buffer that is not one.")
+
+(defcustom herdr-panel-visit-access 'control
+  "How a panel opens the terminal for a row it visits.
+`control' gives a terminal that takes what is typed at it, which is
+what opening one is usually for.  `observe' gives one that only shows
+the pane and leaves control wherever it already was, which is worth
+having when a panel is being read rather than acted on: herdr grants
+control to a single client, so a terminal opened here takes it from
+the herdr terminal.
+
+A prefix argument to `herdr-panel-visit' asks for the other one."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(choice (const :tag "Take control" control)
+                 (const :tag "Observe only" observe)))
 
 (defvar-local herdr-panel-pane-function nil
   "Function returning the pane the row at point stands for.
@@ -510,12 +526,21 @@ window that was not selected at the time."
 
 ;;; Acting on a Row
 
-(defun herdr-panel-visit ()
-  "Show the terminal for the row at point."
-  (interactive)
+(defun herdr-panel-visit (&optional other)
+  "Show the terminal for the row at point.
+With a prefix argument OTHER, open it the other way round from
+`herdr-panel-visit-access'."
+  (interactive "P")
   (unless herdr-panel-pane-function
     (user-error "Not in a herdr panel"))
-  (herdr-panel-open-pane (funcall herdr-panel-pane-function)))
+  (herdr-panel-open-pane (funcall herdr-panel-pane-function)
+                         (herdr-panel--access other)))
+
+(defun herdr-panel--access (invert)
+  "Return how to open a terminal, INVERT swapping the usual answer."
+  (if invert
+      (if (eq herdr-panel-visit-access 'control) 'observe 'control)
+    herdr-panel-visit-access))
 
 (defun herdr-panel-refresh ()
   "Redraw this panel now."
@@ -687,9 +712,17 @@ visited, because that highlight follows the selected window."
   (when-let* ((buffer (seq-find (lambda (buffer)
                                   (equal (herdr-panel--buffer-pane buffer)
                                          pane))
-                                (buffer-list)))
-              (window (get-buffer-window buffer)))
-    (select-window window)))
+                                (buffer-list))))
+    ;; A terminal already on screen is shown as it stands, so asking for
+    ;; control has to say so again here.  Otherwise a pane first opened
+    ;; from a panel that was only reading would go on ignoring what was
+    ;; typed at it however often it was visited.
+    (when (and (eq access 'control)
+               (not (buffer-local-value 'herdr-term--writable buffer)))
+      (with-current-buffer buffer
+        (herdr-term-take-control)))
+    (when-let* ((window (get-buffer-window buffer)))
+      (select-window window))))
 
 ;;; _
 (provide 'herdr-panel)
