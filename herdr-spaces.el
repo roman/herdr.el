@@ -57,6 +57,12 @@
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-spaces-read-only-marker "[ro]"
+  "Mark shown after the name of a workspace opened for reading only."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'string)
+
 (defcustom herdr-spaces-git t
   "Whether to show the branch and working tree state of a workspace.
 This runs git once per workspace per `herdr-spaces-git-ttl', which on
@@ -229,9 +235,37 @@ holds a single child."
       (herdr-panel-insert-entry
        (list :status (gethash "agent_status" workspace)
              :emphasis (herdr-spaces--emphasis id current)
-             :label (gethash "label" workspace)
+             :label (herdr-spaces--name workspace)
              :detail (herdr-spaces--detail workspace)
              :indent (if indented "   " " "))))))
+
+(defun herdr-spaces--name (workspace)
+  "Return the name to show for WORKSPACE, marked when it is read only.
+Only a workspace open here can be read only.  One with no buffer is
+not mirrored at all, and saying so twice would put a mark on almost
+every row, where it would stop meaning anything."
+  (let ((label (gethash "label" workspace))
+        (id (gethash "workspace_id" workspace)))
+    (if (herdr-spaces--read-only-p id)
+        (concat label " "
+                (herdr-panel-text herdr-spaces-read-only-marker
+                                  'herdr-panel-read-only))
+      label)))
+
+(defun herdr-spaces--read-only-p (workspace-id)
+  "Return non-nil when WORKSPACE-ID is mirrored here, but only to read.
+A workspace with several panes open counts as writable once any one of
+them is, because that is the one taking what is typed."
+  (let ((panes (seq-filter
+                (lambda (pane)
+                  (and (equal (gethash "workspace_id" pane) workspace-id)
+                       (herdr-panel-pane-open-p (gethash "pane_id" pane))))
+                (herdr-session-panes))))
+    (and panes
+         (not (seq-some (lambda (pane)
+                          (herdr-panel-pane-writable-p
+                           (gethash "pane_id" pane)))
+                        panes)))))
 
 (defun herdr-spaces--detail (workspace)
   "Return the lines that follow WORKSPACE's name.

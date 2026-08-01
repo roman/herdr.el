@@ -176,6 +176,11 @@ yellows side by side on one line told nothing apart."
   "Face for the punctuation between fields."
   :group 'herdr-panel)
 
+(defface herdr-panel-read-only
+  '((t :inherit herdr-panel-unknown))
+  "Face for the mark saying a pane is mirrored for reading only."
+  :group 'herdr-panel)
+
 (defface herdr-panel-current
   '((((background dark)) :background "#313244" :extend t)
     (((background light)) :background "#ccd0da" :extend t)
@@ -338,6 +343,18 @@ whether or not they happen to have opened it."
   "Return non-nil when some Emacs buffer mirrors PANE."
   (and pane (member pane (herdr-panel-open-panes)) t))
 
+(defun herdr-panel-pane-writable-p (pane)
+  "Return non-nil when a buffer mirroring PANE can be typed into.
+A pane can be mirrored more than once, and one writable mirror is
+enough: herdr grants control of a pane to a single client, so that
+mirror is the one holding it."
+  (and pane
+       (seq-some (lambda (buffer)
+                   (and (equal (herdr-panel--buffer-pane buffer) pane)
+                        (buffer-local-value 'herdr-term--writable buffer)))
+                 (buffer-list))
+       t))
+
 (defun herdr-panel-emphasis (pane current)
   "Return how to draw a row for PANE, given the CURRENT pane."
   (cond ((and pane (equal pane current)) 'current)
@@ -365,6 +382,7 @@ inside a panel rather than clearing it."
 ;; Declared rather than required: a panel must stay usable without the
 ;; terminal, whose ghostel dependency loads a native module.
 (defvar herdr-term--pane)
+(defvar herdr-term--writable)
 (declare-function herdr-term-open "herdr-term" (pane &optional writable))
 
 ;;; Panels
@@ -545,12 +563,19 @@ That is a panel, or a terminal mirroring a pane."
         (with-current-buffer buffer
           (funcall refresh))))))
 
+(defun herdr-panel-marks ()
+  "Return what the panels mark, as a value that can be compared.
+The pane in front of you, and every pane open here with whether it can
+be typed into.  None of this is in the session tree: all of it is a
+fact about Emacs, so no event from herdr will report any of it."
+  (cons (herdr-panel-current-pane)
+        (mapcar (lambda (pane)
+                  (cons pane (herdr-panel-pane-writable-p pane)))
+                (herdr-panel-open-panes))))
+
 (defun herdr-panel--note-marks (&rest _)
-  "Redraw the panels when what they mark has changed.
-That is either the pane in front of you or the set of panes open here,
-neither of which the session knows about: both are facts about Emacs,
-so no event from herdr will report them."
-  (let ((marks (cons (herdr-panel-current-pane) (herdr-panel-open-panes))))
+  "Redraw the panels when what they mark has changed."
+  (let ((marks (herdr-panel-marks)))
     (unless (equal marks herdr-panel--marks)
       (setq herdr-panel--marks marks)
       (herdr-panel-refresh-all))))
@@ -563,6 +588,9 @@ Idempotent, so every panel may call it as it opens."
   ;; Also on a window changing buffer, which is how a terminal opened or
   ;; killed elsewhere becomes visible to the panels.
   (add-hook 'window-buffer-change-functions #'herdr-panel--note-marks)
+  ;; Taking control of a pane changes no window, so nothing above would
+  ;; notice it.  The poll does.
+  (add-hook 'herdr-session-fingerprint-functions #'herdr-panel-marks)
   (unless (herdr-session-live-p)
     (herdr-session-start)))
 
@@ -574,7 +602,8 @@ Idempotent, so every panel may call it as it opens."
                     (buffer-list))
     (remove-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
     (remove-hook 'window-selection-change-functions #'herdr-panel--note-marks)
-    (remove-hook 'window-buffer-change-functions #'herdr-panel--note-marks)))
+    (remove-hook 'window-buffer-change-functions #'herdr-panel--note-marks)
+    (remove-hook 'herdr-session-fingerprint-functions #'herdr-panel-marks)))
 
 ;;; Rendering
 
