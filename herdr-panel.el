@@ -107,10 +107,15 @@
 (defface herdr-panel-current
   '((((background dark)) :background "#313244" :extend t)
     (((background light)) :background "#ccd0da" :extend t)
-    (t :inherit highlight :extend t))
+    (t :background "grey25" :extend t))
   "Face filling the row whose pane the selected window shows.
-Only a background: the mark keeps its own colour, and the name is
-brightened by `herdr-panel-current-label' instead."
+Only a background, and a quiet one: the mark keeps its own colour and
+the name is brightened by `herdr-panel-current-label' instead.
+
+Deliberately not inheriting `highlight'.  Themes are free to make that
+face shout, and several do; doom-peacock sets it to an orange red,
+which against these foregrounds is unreadable.  A row fill has to stay
+behind its text."
   :group 'herdr-panel)
 
 (defface herdr-panel-current-label
@@ -223,6 +228,14 @@ inside a panel rather than clearing it."
 
 (defvar-local herdr-panel-refresh-function nil
   "Function redrawing this panel, or nil in a buffer that is not one.")
+
+(defun herdr-panel-own-buffer-p (buffer)
+  "Return non-nil when BUFFER is part of the herdr interface.
+That is a panel, or a terminal mirroring a pane."
+  (and (buffer-live-p buffer)
+       (or (buffer-local-value 'herdr-panel-refresh-function buffer)
+           (buffer-local-value 'herdr-term--pane buffer))
+       t))
 
 (defun herdr-panel-refresh-all ()
   "Redraw every live panel."

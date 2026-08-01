@@ -64,6 +64,22 @@ The agents panel takes what is left."
   :group 'herdr-panel
   :type 'number)
 
+(defcustom herdr-ui-tame-window-packages t
+  "Whether to ask window-managing packages to leave the layout alone.
+Packages that resize or fade windows behind your back fight a fixed
+layout.  golden-ratio regrows whichever window you select, so a panel
+changes width as you move through it and the terminal shrinks the
+moment you leave it.  dimmer fades every window but the selected one,
+so reading the terminal greys out the panels that exist to be glanced
+at, and touching a panel greys out the terminal.
+
+Only the herdr windows are exempted, and only while the layout is on
+the frame, so both packages behave as they always did everywhere else.
+Set this to nil to leave their settings untouched."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'boolean)
+
 ;;; Layout
 
 ;;;###autoload
@@ -77,9 +93,16 @@ a prefix argument, PANE is read with completion."
                        (herdr-ui--read-pane))))
   (unless (herdr-session-live-p)
     (herdr-session-start))
+  (when herdr-ui-tame-window-packages
+    (herdr-ui--tame))
   (let ((pane (or pane (herdr-panel-current-pane) (herdr-ui--focused-pane))))
     (unless pane
       (user-error "Herdr reports no pane to show"))
+    ;; Before `delete-other-windows', which refuses to leave a side
+    ;; window alone on a frame, and because a side window that survives
+    ;; is reused at whatever width it drifted to rather than at the one
+    ;; asked for here.
+    (herdr-ui--clear)
     (delete-other-windows)
     (herdr-panel-open-pane pane)
     (herdr-ui--display (herdr-spaces--prepare) -1 herdr-ui-spaces-height)
@@ -90,6 +113,14 @@ a prefix argument, PANE is read with completion."
         (herdr-ui-tab-line-mode 1))
       (when-let* ((window (get-buffer-window buffer)))
         (select-window window)))))
+
+(defun herdr-ui--clear (&optional frame)
+  "Take the herdr side windows off FRAME, leaving other windows alone."
+  (dolist (window (window-list frame))
+    (when (and (window-parameter window 'window-side)
+               (herdr-panel-own-buffer-p (window-buffer window))
+               (window-live-p window))
+      (delete-window window))))
 
 (defun herdr-ui--display (buffer slot height)
   "Show BUFFER in the panel column, in SLOT.
@@ -135,6 +166,32 @@ HEIGHT is its share of the frame."
     (when-let* ((buffer (get-buffer name)))
       (kill-buffer buffer)))
   (herdr-session-stop))
+
+;;; Living With Other Window Packages
+
+(defun herdr-ui-layout-p (&optional frame)
+  "Return non-nil while the herdr layout is on FRAME.
+The whole layout is protected, not merely the window you are in: a
+resize of the terminal moves the panels beside it just as surely."
+  (seq-some (lambda (window)
+              (herdr-panel-own-buffer-p (window-buffer window)))
+            (window-list frame)))
+
+(defun herdr-ui--dimmer-keeps-p (buffer)
+  "Return non-nil when dimmer should leave BUFFER at full strength."
+  (herdr-panel-own-buffer-p buffer))
+
+(defun herdr-ui--tame ()
+  "Ask golden-ratio and dimmer to leave the herdr layout alone.
+Idempotent, and narrow: each package is told about herdr's own windows
+and nothing else, so both go on behaving as they did elsewhere.  There
+is nothing to undo when the layout closes, because both tests answer
+no once the herdr buffers are gone."
+  (when (boundp 'golden-ratio-inhibit-functions)
+    (add-hook 'golden-ratio-inhibit-functions #'herdr-ui-layout-p))
+  (when (boundp 'dimmer-buffer-exclusion-predicates)
+    (add-hook 'dimmer-buffer-exclusion-predicates
+              #'herdr-ui--dimmer-keeps-p)))
 
 ;;; Tab Line
 
