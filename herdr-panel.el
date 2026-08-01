@@ -193,38 +193,58 @@ there is no agent at all."
     (closed . herdr-panel-unopened))
   "Face for a row's name at each degree of emphasis.")
 
-(defun herdr-panel-insert-row (status label emphasis &optional detail indent)
-  "Insert one panel row, the way herdr draws one.
-STATUS picks the mark and its colour, LABEL names the row and DETAIL
-trails it.  INDENT goes before the mark, for a row inside a group.
+(defun herdr-panel-insert-entry (spec)
+  "Insert one panel entry described by SPEC.
+SPEC is a plist:
 
-EMPHASIS is `current' for the pane the selected window shows, `open'
-for one some other Emacs buffer mirrors, and `closed' for one running
-with no buffer here.  A `current' row is filled as well, which is how
-herdr shows the pane it is displaying.
+  `:status'    the agent status, which picks the mark and its colour
+  `:emphasis'  `current' for the pane the selected window shows,
+               `open' for one another buffer mirrors, `closed' for one
+               with no buffer here
+  `:label'     the name, shown beside the mark
+  `:aside'     more of the first line, shown after the name
+  `:detail'    a second line, indented under the name, or nil for an
+               entry of one line
+  `:indent'    what precedes the mark, for an entry inside a group
+
+An entry is one row however many lines it takes.  It is filled as one
+when it is `current', and moving between rows steps over it whole.
 
 Only the mark is coloured by the status.  herdr leaves the name in one
-colour and lets the mark carry the state, and the mark stays at full
-strength even on a closed row: an agent that wants the user wants them
+colour and lets the mark carry the state, and the mark keeps its
+colour even on a closed entry: an agent that wants the user wants them
 whether or not they happen to have opened it."
-  (let ((start (point)))
-    (insert (or indent " ")
-            (herdr-panel-status-string status)
+  (let* ((emphasis (plist-get spec :emphasis))
+         (detail (plist-get spec :detail))
+         (aside (plist-get spec :aside))
+         (indent (or (plist-get spec :indent) " "))
+         (faded (eq emphasis 'closed))
+         (start (point)))
+    (insert indent
+            (herdr-panel-status-string (plist-get spec :status))
             " "
             (herdr-panel--propertize
-             label
+             (plist-get spec :label)
              (or (cdr (assq emphasis herdr-panel-emphasis-faces))
                  'herdr-panel-label)))
-    (when (and detail (not (string-empty-p detail)))
-      (insert "  " (herdr-panel--propertize
-                    detail (if (eq emphasis 'closed)
-                               'herdr-panel-unopened
-                             'herdr-panel-detail))))
+    (when (and aside (not (string-empty-p aside)))
+      (insert " " (herdr-panel--propertize
+                   aside (if faded 'herdr-panel-unopened
+                           'herdr-panel-detail))))
     (insert "\n")
+    (when (and detail (not (string-empty-p detail)))
+      ;; Aligned under the name rather than under the mark, so a column
+      ;; of entries reads as a column of names with notes beneath them.
+      (insert (make-string (+ (length indent) 2) ?\s))
+      (herdr-panel--add-face
+       (point)
+       (progn (insert detail) (point))
+       (if faded 'herdr-panel-unopened 'herdr-panel-detail))
+      (insert "\n"))
     (when (eq emphasis 'current)
       ;; Merged beneath, so that the mark and the name keep their own
       ;; colours and only the background comes from here.  Replacing the
-      ;; face instead would flatten the row to a single colour.
+      ;; face instead would flatten the entry to a single colour.
       (herdr-panel--add-face start (point) 'herdr-panel-current))))
 
 (defun herdr-panel-open-panes ()
@@ -310,14 +330,22 @@ stands for."
     (and section (oref section value) t)))
 
 (defun herdr-panel--step (direction)
-  "Move point one row in DIRECTION, or return nil having not moved."
-  (let ((origin (point)))
-    (beginning-of-line)
-    (while (and (zerop (forward-line direction))
-                (not (herdr-panel-row-p))
-                (if (> direction 0) (not (eobp)) (not (bobp)))))
+  "Move point one row in DIRECTION, or return nil having not moved.
+Steps between sections rather than between lines, because an entry
+spans as many lines as it has to say and is still one row.  Landing on
+a section's own start is what keeps a step over a two line entry from
+stopping halfway down it."
+  (let ((origin (point))
+        (from (magit-current-section))
+        (target nil))
+    (while (and (not target) (zerop (forward-line direction)))
+      (let ((section (magit-current-section)))
+        (when (and section
+                   (not (eq section from))
+                   (oref section value))
+          (setq target section))))
     (cond
-      ((herdr-panel-row-p) (beginning-of-line) t)
+      (target (goto-char (oref target start)) t)
       (t (goto-char origin) nil))))
 
 (defun herdr-panel-next-row (&optional count)

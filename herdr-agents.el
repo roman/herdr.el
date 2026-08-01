@@ -51,6 +51,12 @@
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-agents-separator "›"
+  "What stands between a workspace and the window inside it."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'string)
+
 ;;; Keymaps
 
 (defvar-keymap herdr-agents-mode-map
@@ -116,14 +122,45 @@ several agents share a status."
                (herdr-session-agents)))
 
 (defun herdr-agents--insert (agent current)
-  "Insert a row for AGENT, emphasised against the CURRENT pane."
+  "Insert an entry for AGENT, emphasised against the CURRENT pane.
+Two lines, as herdr draws them: where the agent is on the first, and
+what it is and what it is doing on the second.  Which workspace and
+window an agent sits in is what tells two agents of the same kind
+apart, so that goes above the kind rather than below it."
   (let ((pane (gethash "pane_id" agent)))
     (magit-insert-section (herdr-agent pane)
-      (herdr-panel-insert-row (gethash "agent_status" agent)
-                              (herdr-agents--name agent)
-                              (herdr-panel-emphasis pane current)
-                              (gethash "terminal_title_stripped" agent)
-                              " "))))
+      (herdr-panel-insert-entry
+       (list :status (gethash "agent_status" agent)
+             :emphasis (herdr-panel-emphasis pane current)
+             :label (herdr-agents--where agent)
+             :aside (herdr-agents--kind agent)
+             :detail (gethash "terminal_title_stripped" agent))))))
+
+(defun herdr-agents--where (agent)
+  "Return where AGENT is: its workspace, and its window within it.
+The window is left out when the workspace holds only one, where it
+would be a number that never changes and never distinguishes."
+  (let* ((workspace (herdr-session-workspace (gethash "workspace_id" agent)))
+         (name (if workspace
+                   (gethash "label" workspace)
+                 (gethash "workspace_id" agent)))
+         (tab (herdr-agents--tab agent)))
+    (if tab (concat name " " herdr-agents-separator " " tab) name)))
+
+(defun herdr-agents--tab (agent)
+  "Return the name of the window AGENT sits in, or nil when it is alone."
+  (let ((tabs (herdr-session-tabs (gethash "workspace_id" agent))))
+    (when (cdr tabs)
+      (when-let* ((tab (seq-find (lambda (tab)
+                                   (equal (gethash "tab_id" tab)
+                                          (gethash "tab_id" agent)))
+                                 tabs)))
+        (or (gethash "label" tab)
+            (number-to-string (gethash "number" tab)))))))
+
+(defun herdr-agents--kind (agent)
+  "Return what kind of agent AGENT is, as herdr detected it."
+  (or (gethash "display_agent" agent) (gethash "agent" agent)))
 
 (defun herdr-agents--name (agent)
   "Return what to call AGENT.

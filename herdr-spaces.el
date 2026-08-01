@@ -51,6 +51,12 @@
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-spaces-separator "·"
+  "What stands between the notes on a workspace's second line."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'string)
+
 ;;; Keymaps
 
 (defvar-keymap herdr-spaces-mode-map
@@ -132,11 +138,39 @@ holds a single child."
   "Insert WORKSPACE, emphasised against CURRENT and INDENTED under a space."
   (let ((id (gethash "workspace_id" workspace)))
     (magit-insert-section (herdr-workspace id)
-      (herdr-panel-insert-row (gethash "agent_status" workspace)
-                              (gethash "label" workspace)
-                              (herdr-spaces--emphasis id current)
-                              (herdr-spaces--branch workspace)
-                              (if indented "   " " ")))))
+      (herdr-panel-insert-entry
+       (list :status (gethash "agent_status" workspace)
+             :emphasis (herdr-spaces--emphasis id current)
+             :label (gethash "label" workspace)
+             :detail (herdr-spaces--detail workspace)
+             :indent (if indented "   " " "))))))
+
+(defun herdr-spaces--detail (workspace)
+  "Return the second line for WORKSPACE.
+The directory it sits in, which is where its name comes from and what
+tells two checkouts of the same basename apart, then its checkout when
+it is a worktree, then how many windows it holds when it holds more
+than one.  herdr shows the branch and the git status here, and neither
+is on the wire for a workspace that is not a worktree."
+  (let ((parts (delq nil
+                     (list (herdr-spaces--directory workspace)
+                           (herdr-spaces--branch workspace)
+                           (herdr-spaces--windows workspace)))))
+    (and parts (string-join parts (concat " " herdr-spaces-separator " ")))))
+
+(defun herdr-spaces--directory (workspace)
+  "Return where WORKSPACE sits, shortened for a narrow panel."
+  (when-let* ((tab (gethash "active_tab_id" workspace))
+              (pane (car (herdr-session-panes tab)))
+              (cwd (gethash "cwd" pane)))
+    (abbreviate-file-name cwd)))
+
+(defun herdr-spaces--windows (workspace)
+  "Return the window count of WORKSPACE, or nil when it is one.
+A count of one is what every workspace starts with and so says
+nothing."
+  (let ((tabs (gethash "tab_count" workspace)))
+    (and tabs (> tabs 1) (format "%d windows" tabs))))
 
 (defun herdr-spaces--emphasis (workspace-id current)
   "Return how to draw WORKSPACE-ID, given the CURRENT workspace.
