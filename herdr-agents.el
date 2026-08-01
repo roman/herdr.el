@@ -116,14 +116,14 @@ several agents share a status."
                (herdr-session-agents)))
 
 (defun herdr-agents--insert (agent current)
-  "Insert a row for AGENT, filled when its pane is CURRENT."
+  "Insert a row for AGENT, emphasised against the CURRENT pane."
   (let ((pane (gethash "pane_id" agent)))
     (magit-insert-section (herdr-agent pane)
       (herdr-panel-insert-row (gethash "agent_status" agent)
                               (herdr-agents--name agent)
+                              (herdr-panel-emphasis pane current)
                               (gethash "terminal_title_stripped" agent)
-                              " "
-                              (equal pane current)))))
+                              " "))))
 
 (defun herdr-agents--name (agent)
   "Return what to call AGENT.

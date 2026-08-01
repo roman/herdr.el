@@ -129,14 +129,26 @@ holds a single child."
       (herdr-spaces--insert-workspace (car workspaces) current nil))))
 
 (defun herdr-spaces--insert-workspace (workspace current indented)
-  "Insert WORKSPACE, filled when it is CURRENT and INDENTED under a space."
+  "Insert WORKSPACE, emphasised against CURRENT and INDENTED under a space."
   (let ((id (gethash "workspace_id" workspace)))
     (magit-insert-section (herdr-workspace id)
       (herdr-panel-insert-row (gethash "agent_status" workspace)
                               (gethash "label" workspace)
+                              (herdr-spaces--emphasis id current)
                               (herdr-spaces--branch workspace)
-                              (if indented "   " " ")
-                              (equal id current)))))
+                              (if indented "   " " ")))))
+
+(defun herdr-spaces--emphasis (workspace-id current)
+  "Return how to draw WORKSPACE-ID, given the CURRENT workspace.
+A workspace counts as open when any one of its panes is: it is the
+workspace the row stands for, not a particular pane of it."
+  (cond ((equal workspace-id current) 'current)
+        ((seq-some (lambda (pane)
+                     (and (equal (gethash "workspace_id" pane) workspace-id)
+                          (herdr-panel-pane-open-p (gethash "pane_id" pane))))
+                   (herdr-session-panes))
+         'open)
+        (t 'closed)))
 
 (defun herdr-spaces--branch (workspace)
   "Return the checkout WORKSPACE sits on, or nil when it is not a worktree.

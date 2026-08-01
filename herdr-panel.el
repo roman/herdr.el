@@ -99,6 +99,15 @@
   "Face for the name on a row that is not the current one."
   :group 'herdr-panel)
 
+(defface herdr-panel-unopened
+  '((((background dark)) :foreground "#6c7086")
+    (((background light)) :foreground "#9ca0b0")
+    (t :inherit shadow))
+  "Face for the name of a pane no Emacs buffer is mirroring.
+Dimmer than `herdr-panel-label', so that a glance separates what is
+open here from what is merely running over there."
+  :group 'herdr-panel)
+
 (defface herdr-panel-detail
   '((t :inherit herdr-panel-unknown))
   "Face for the trailing detail on a row, such as a terminal title."
@@ -178,34 +187,66 @@ there is no agent at all."
   (herdr-panel--propertize (herdr-panel-status-symbol status)
                            (herdr-panel-status-face status)))
 
-(defun herdr-panel-insert-row (status label &optional detail indent current)
+(defconst herdr-panel-emphasis-faces
+  '((current . herdr-panel-current-label)
+    (open . herdr-panel-label)
+    (closed . herdr-panel-unopened))
+  "Face for a row's name at each degree of emphasis.")
+
+(defun herdr-panel-insert-row (status label emphasis &optional detail indent)
   "Insert one panel row, the way herdr draws one.
 STATUS picks the mark and its colour, LABEL names the row and DETAIL
 trails it.  INDENT goes before the mark, for a row inside a group.
 
-Only the mark is coloured by the status; herdr leaves the name in one
-colour and lets the mark carry the state.  A non-nil CURRENT fills the
-whole row, which is how herdr shows the pane it is displaying."
+EMPHASIS is `current' for the pane the selected window shows, `open'
+for one some other Emacs buffer mirrors, and `closed' for one running
+with no buffer here.  A `current' row is filled as well, which is how
+herdr shows the pane it is displaying.
+
+Only the mark is coloured by the status.  herdr leaves the name in one
+colour and lets the mark carry the state, and the mark stays at full
+strength even on a closed row: an agent that wants the user wants them
+whether or not they happen to have opened it."
   (let ((start (point)))
     (insert (or indent " ")
             (herdr-panel-status-string status)
             " "
-            (herdr-panel--propertize label (if current
-                                               'herdr-panel-current-label
-                                             'herdr-panel-label)))
+            (herdr-panel--propertize
+             label
+             (or (cdr (assq emphasis herdr-panel-emphasis-faces))
+                 'herdr-panel-label)))
     (when (and detail (not (string-empty-p detail)))
-      (insert "  " (herdr-panel--propertize detail 'herdr-panel-detail)))
+      (insert "  " (herdr-panel--propertize
+                    detail (if (eq emphasis 'closed)
+                               'herdr-panel-unopened
+                             'herdr-panel-detail))))
     (insert "\n")
-    (when current
+    (when (eq emphasis 'current)
       ;; Merged beneath, so that the mark and the name keep their own
       ;; colours and only the background comes from here.  Replacing the
       ;; face instead would flatten the row to a single colour.
       (herdr-panel--add-face start (point) 'herdr-panel-current))))
 
+(defun herdr-panel-open-panes ()
+  "Return the panes some Emacs buffer is mirroring, in no order."
+  (sort (delq nil (mapcar #'herdr-panel--buffer-pane (buffer-list)))
+        #'string<))
+
+(defun herdr-panel-pane-open-p (pane)
+  "Return non-nil when some Emacs buffer mirrors PANE."
+  (and pane (member pane (herdr-panel-open-panes)) t))
+
+(defun herdr-panel-emphasis (pane current)
+  "Return how to draw a row for PANE, given the CURRENT pane."
+  (cond ((and pane (equal pane current)) 'current)
+        ((herdr-panel-pane-open-p pane) 'open)
+        (t 'closed)))
+
 ;;; The Current Pane
 
-(defvar herdr-panel--current-pane nil
-  "Pane the panels last highlighted, so a change can be noticed.")
+(defvar herdr-panel--marks nil
+  "What the panels last marked, so a change can be noticed.
+This has the form (CURRENT-PANE . OPEN-PANES).")
 
 (defun herdr-panel-current-pane ()
   "Return the pane mirrored by the window you are looking at, or nil.
@@ -394,19 +435,24 @@ That is a panel, or a terminal mirroring a pane."
         (with-current-buffer buffer
           (funcall refresh))))))
 
-(defun herdr-panel--note-selection (&rest _)
-  "Redraw the panels when the selected window changed which pane is current."
-  (let ((pane (herdr-panel-current-pane)))
-    (unless (equal pane herdr-panel--current-pane)
-      (setq herdr-panel--current-pane pane)
+(defun herdr-panel--note-marks (&rest _)
+  "Redraw the panels when what they mark has changed.
+That is either the pane in front of you or the set of panes open here,
+neither of which the session knows about: both are facts about Emacs,
+so no event from herdr will report them."
+  (let ((marks (cons (herdr-panel-current-pane) (herdr-panel-open-panes))))
+    (unless (equal marks herdr-panel--marks)
+      (setq herdr-panel--marks marks)
       (herdr-panel-refresh-all))))
 
 (defun herdr-panel-watch ()
   "Keep the panels current with the session and with the selection.
 Idempotent, so every panel may call it as it opens."
   (add-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
-  (add-hook 'window-selection-change-functions
-            #'herdr-panel--note-selection)
+  (add-hook 'window-selection-change-functions #'herdr-panel--note-marks)
+  ;; Also on a window changing buffer, which is how a terminal opened or
+  ;; killed elsewhere becomes visible to the panels.
+  (add-hook 'window-buffer-change-functions #'herdr-panel--note-marks)
   (unless (herdr-session-live-p)
     (herdr-session-start)))
 
@@ -417,8 +463,8 @@ Idempotent, so every panel may call it as it opens."
                                           buffer))
                     (buffer-list))
     (remove-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
-    (remove-hook 'window-selection-change-functions
-                 #'herdr-panel--note-selection)))
+    (remove-hook 'window-selection-change-functions #'herdr-panel--note-marks)
+    (remove-hook 'window-buffer-change-functions #'herdr-panel--note-marks)))
 
 ;;; Rendering
 
