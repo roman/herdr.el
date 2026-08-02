@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Roman Gonzalez
 
-;; Author: Roman Gonzalez <antrophic@roman-gonzalez.info>
+;; Author: Roman Gonzalez <open-source@roman-gonzalez.info>
 
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -83,7 +83,12 @@ always be free to disagree with the other.  It names the work rather
 than the tool doing it, so swapping that tool changes nothing here.")
 
 (defcustom herdr-review-buffer-name "*herdr-reviews*"
-  "Name of the buffer showing the reviews panel."
+  "Name of the buffer showing the reviews panel.
+One buffer holds the list, as the spaces and agents panels do, and the
+list has a row per workspace under review.  Reviews themselves are not
+limited to one: every workspace may have its own, open at the same
+time, each in its own tab and its own terminal buffer.  The limit is
+one review per workspace, and it is the herdr-review script's."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-review
   :type 'string)
