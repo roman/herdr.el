@@ -109,12 +109,13 @@ a very large repository is worth knowing about."
 (defun herdr-spaces ()
   "Show the panel listing the spaces of the herdr session."
   (interactive)
-  (pop-to-buffer (herdr-spaces--prepare)))
+  (pop-to-buffer (herdr-spaces-panel)))
 
-(defun herdr-spaces--prepare ()
+(defun herdr-spaces-panel ()
   "Return the spaces buffer, drawn and tracking the session.
 Separate from `herdr-spaces' so that a caller arranging its own
-windows does not have to undo a `pop-to-buffer' first."
+windows does not have to undo a `pop-to-buffer' first.  This is the
+form `herdr-ui-panels' names to put the panel in a column."
   (let ((buffer (get-buffer-create herdr-spaces-buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'herdr-spaces-mode)

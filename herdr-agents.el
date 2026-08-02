@@ -65,6 +65,17 @@ without a rule they read as one list under two headings."
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-agents-hidden-kinds nil
+  "Kinds of agent this panel leaves out.
+Anything herdr reports as an agent appears here, which includes what a
+tool reported about itself over the socket rather than what herdr
+recognised in a pane.  A kind that has a panel of its own belongs in
+that panel alone, and names itself here so that it is not listed
+twice."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(repeat string))
+
 (defface herdr-agents-claude
   '((((background dark)) :foreground "#d97757")
     (((background light)) :foreground "#c05621")
@@ -118,12 +129,13 @@ codepoint here if your font has the real logo."
 (defun herdr-agents ()
   "Show the panel listing the agents herdr has detected."
   (interactive)
-  (pop-to-buffer (herdr-agents--prepare)))
+  (pop-to-buffer (herdr-agents-panel)))
 
-(defun herdr-agents--prepare ()
+(defun herdr-agents-panel ()
   "Return the agents buffer, drawn and tracking the session.
 Separate from `herdr-agents' so that a caller arranging its own
-windows does not have to undo a `pop-to-buffer' first."
+windows does not have to undo a `pop-to-buffer' first.  This is the
+form `herdr-ui-panels' names to put the panel in a column."
   (let ((buffer (get-buffer-create herdr-agents-buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'herdr-agents-mode)
@@ -152,14 +164,18 @@ windows does not have to undo a `pop-to-buffer' first."
 ;;; Rendering
 
 (defun herdr-agents--sorted ()
-  "Return the agents, the ones wanting attention first.
+  "Return the agents to list, the ones wanting attention first.
 Ties keep herdr's own order, so the list does not shuffle while
-several agents share a status."
+several agents share a status.  Kinds in `herdr-agents-hidden-kinds'
+are left out."
   (seq-sort-by (lambda (agent)
                  (herdr-session-status-priority
                   (gethash "agent_status" agent)))
                #'>
-               (herdr-session-agents)))
+               (seq-remove (lambda (agent)
+                             (member (gethash "agent" agent)
+                                     herdr-agents-hidden-kinds))
+                           (herdr-session-agents))))
 
 (defun herdr-agents--insert (agent current)
   "Insert an entry for AGENT, emphasised against the CURRENT pane.

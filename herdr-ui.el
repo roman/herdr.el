@@ -26,10 +26,14 @@
 
 ;;; Commentary:
 
-;; The herdr layout in one command: spaces above agents down the left, and
+;; The herdr layout in one command: a column of panels down the left, and
 ;; a terminal filling the rest.  The panels go in side windows, so that
 ;; ordinary display of a file or a help buffer cannot land in one of them
 ;; and `delete-other-windows' in the terminal leaves the layout standing.
+
+;; What the column holds is `herdr-ui-panels', which starts as spaces
+;; above agents.  A package with a panel of its own adds it there and this
+;; file needs to know nothing about it.
 
 ;; The tabs of the terminal's workspace ride on its tab line rather than
 ;; in a window of their own.  A window would cost a mode line and a border
@@ -71,14 +75,43 @@
   :group 'herdr-panel
   :type 'natnum)
 
-(defcustom herdr-ui-spaces-height 0.6
-  "Share of the panel column given to the spaces panel.
-The agents panel takes what is left.  Spaces gets the larger share
-because it lists every workspace, while agents lists only the panes
-herdr found one running in."
+(defcustom herdr-ui-panels
+  '((herdr-spaces-panel . 3)
+    (herdr-agents-panel . 2))
+  "The panels stacked in the column, top to bottom.
+Each entry is (FUNCTION . WEIGHT).  FUNCTION takes no arguments and
+returns the panel's buffer, drawn and tracking the session; WEIGHT is
+that panel's share of the column, counted against the weights of the
+other panels rather than as a fraction, so that removing one leaves
+the rest in proportion.  Spaces outweighs agents because it lists
+every workspace, while agents lists only the panes herdr found one
+running in.
+
+A panel from another package is not listed here.  It registers itself
+with `herdr-ui-add-panel' and appears under these; keeping the two
+apart is what stops a value saved by \\[customize] from dropping a
+registration made before it was read."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
-  :type 'number)
+  :type '(alist :key-type function :value-type number))
+
+(make-obsolete-variable 'herdr-ui-spaces-height 'herdr-ui-panels
+                        "herdr 0.1.0")
+
+(defvar herdr-ui--added-panels nil
+  "Panels other packages have added, in the order they added them.
+Each entry has the same (FUNCTION . WEIGHT) form as `herdr-ui-panels',
+and they follow it in the column.")
+
+(defun herdr-ui-add-panel (function &optional weight)
+  "Put the panel FUNCTION at the foot of the column, taking WEIGHT of it.
+WEIGHT defaults to 1, which is the share for a panel that is usually a
+heading and a row or two.  Does nothing when FUNCTION is already
+registered, so that a package may call this each time it is loaded."
+  (unless (assq function herdr-ui--added-panels)
+    (setq herdr-ui--added-panels
+          (append herdr-ui--added-panels
+                  (list (cons function (or weight 1)))))))
 
 (defcustom herdr-ui-tame-window-packages t
   "Whether to ask window-managing packages to leave the layout alone.
@@ -170,10 +203,13 @@ fraction of the width it was just given."
             (window-list frame)))
 
 (defun herdr-ui--show-panels ()
-  "Put the panels in their column, spaces above agents."
-  (herdr-ui--display (herdr-spaces--prepare) -1 herdr-ui-spaces-height)
-  (herdr-ui--display (herdr-agents--prepare) 1
-                     (- 1 herdr-ui-spaces-height)))
+  "Put the panels in their column, added ones under configured ones."
+  (let* ((panels (append herdr-ui-panels herdr-ui--added-panels))
+         (total (float (apply #'+ 0 (mapcar #'cdr panels))))
+         (slot 0))
+    (dolist (panel panels)
+      (herdr-ui--display (funcall (car panel)) slot (/ (cdr panel) total))
+      (setq slot (1+ slot)))))
 
 (defun herdr-ui--clear (&optional frame)
   "Take the herdr side windows off FRAME, leaving other windows alone."
@@ -221,10 +257,14 @@ HEIGHT is its share of the frame."
 
 ;;;###autoload
 (defun herdr-ui-quit ()
-  "Take the herdr panels off the frame and stop tracking the session."
+  "Take the herdr panels off the frame and stop tracking the session.
+Every panel goes, including one from a package this file knows nothing
+about, because what is left behind would keep asking the session for a
+redraw that no longer comes.  Terminals stay: a buffer mirroring a
+pane is work in progress, not furniture."
   (interactive)
-  (dolist (name (list herdr-spaces-buffer-name herdr-agents-buffer-name))
-    (when-let* ((buffer (get-buffer name)))
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'herdr-panel-refresh-function buffer)
       (kill-buffer buffer)))
   (herdr-session-stop))
 

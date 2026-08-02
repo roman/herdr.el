@@ -369,6 +369,7 @@ A pane can be mirrored more than once, and one writable mirror is
 enough: herdr grants control of a pane to a single client, so that
 mirror is the one holding it."
   (and pane
+       (boundp 'herdr-term--writable)
        (seq-some (lambda (buffer)
                    (and (equal (herdr-panel--buffer-pane buffer) pane)
                         (buffer-local-value 'herdr-term--writable buffer)))
@@ -396,8 +397,12 @@ inside a panel rather than clearing it."
       (seq-some #'herdr-panel--buffer-pane (buffer-list))))
 
 (defun herdr-panel--buffer-pane (buffer)
-  "Return the herdr pane BUFFER mirrors, or nil when it mirrors none."
-  (buffer-local-value 'herdr-term--pane buffer))
+  "Return the herdr pane BUFFER mirrors, or nil when it mirrors none.
+Nil, rather than an error, when the terminal has never been loaded:
+the variable below is declared here and given its value there, and
+`buffer-local-value' signals on one that is declared and unbound."
+  (and (boundp 'herdr-term--pane)
+       (buffer-local-value 'herdr-term--pane buffer)))
 
 ;; Declared rather than required: a panel must stay usable without the
 ;; terminal, whose ghostel dependency loads a native module.
@@ -596,7 +601,7 @@ binds only the latter appears to have no keys at all under evil."
 That is a panel, or a terminal mirroring a pane."
   (and (buffer-live-p buffer)
        (or (buffer-local-value 'herdr-panel-refresh-function buffer)
-           (buffer-local-value 'herdr-term--pane buffer))
+           (herdr-panel--buffer-pane buffer))
        t))
 
 (defun herdr-panel-refresh-all ()
