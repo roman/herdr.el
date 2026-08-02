@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Roman Gonzalez
 
-;; Author: Roman Gonzalez <antrophic@roman-gonzalez.info>
+;; Author: Roman Gonzalez <open-source@roman-gonzalez.info>
 ;; Homepage: https://github.com/roman/herdr.el
 ;; Keywords: processes terminals
 
