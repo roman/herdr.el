@@ -1,4 +1,4 @@
-;;; herdr-tuicr.el --- Drive tuicr reviews from herdr  -*- lexical-binding:t -*-
+;;; herdr-review.el --- The herdr reviews panel  -*- lexical-binding:t -*-
 
 ;; Copyright (C) 2026 Roman Gonzalez
 
@@ -22,17 +22,20 @@
 ;;; Commentary:
 
 ;; A panel of the code reviews waiting for you, and the commands that
-;; start and end one.  A review is a tuicr TUI running in a tab of its own
-;; called "review", inside the workspace whose code is under review.
+;; start and end one.  A review is a review tool running in a tab of its
+;; own, inside the workspace whose code is under review.
 
-;; herdr has no idea what tuicr is, and does not need one.  The review
-;; reports itself over the socket as an agent of kind "tuicr", so herdr
-;; rolls its state up to the tab and the workspace exactly as it does for
-;; a coding agent, and every herdr client sees a blocked review without
-;; being taught anything.  That reporting is done by the `herdr-review'
-;; script from the herdr-tuicr project, which is also what a coding agent
-;; runs when it wants a change looked at; this file is a third caller of
-;; it rather than a second implementation.
+;; herdr has no concept of a code review, and needs none.  The review
+;; reports itself over the socket as an agent, so herdr rolls its state up
+;; to the tab and the workspace exactly as it does for a coding agent, and
+;; every herdr client sees a blocked review without being taught anything.
+;; This file reads it back out of the session tree the same way.
+
+;; Which tool draws the review is not this file's business.  Starting and
+;; ending one is the `herdr-review' script's, which a coding agent runs
+;; when it wants a change looked at, and which a shell runs by hand; this
+;; file is a third caller of it rather than a second implementation.
+;; Today that script runs tuicr.
 
 ;; A workspace holds one review at a time.  Two reviews of one checkout
 ;; is more than an operator can hold at once, so asking for a second goes
@@ -54,147 +57,149 @@
 
 ;;; Options
 
-(defgroup herdr-tuicr nil
-  "Code reviews in herdr, run by tuicr."
+(defgroup herdr-review nil
+  "The code reviews waiting for you in a herdr session."
   :group 'herdr-panel
-  :link '(url-link "https://github.com/roman/herdr-tuicr"))
+  :link '(url-link "https://github.com/roman/herdr.el"))
 
-(defcustom herdr-tuicr-program "herdr-review"
-  "The herdr-review script, which starts and ends a review.
+(defcustom herdr-review-program "herdr-review"
+  "The script that starts and ends a review.
 Named rather than reimplemented so that a review begun from Emacs, from
-a shell, or by a coding agent is the same review.  It comes from the
-herdr-tuicr project, which is where the review lifecycle lives and which
-needs none of Emacs; put its full path here when that project's `bin'
-directory is not on the variable `exec-path'."
+a shell, or by a coding agent is the same review, and so that which
+review tool actually runs is that script's business rather than this
+file's.  It ships apart from herdr, in the herdr-tuicr project; put its
+full path here when that project's `bin' directory is not on the
+variable `exec-path'."
   :package-version '(herdr . "0.1.0")
-  :group 'herdr-tuicr
+  :group 'herdr-review
   :type 'string)
 
-(defconst herdr-tuicr-agent "tuicr"
+(defconst herdr-review-agent "review"
   "The kind of agent a review reports itself as.
 This is what tells a review apart from a coding agent in everything
 herdr reports.  Not an option, because the same string is written by
-the `herdr-tuicr-program' script and read here: one of the two would
-always be free to disagree with the other.")
+the `herdr-review-program' script and read here: one of the two would
+always be free to disagree with the other.  It names the work rather
+than the tool doing it, so swapping that tool changes nothing here.")
 
-(defcustom herdr-tuicr-buffer-name "*herdr-reviews*"
+(defcustom herdr-review-buffer-name "*herdr-reviews*"
   "Name of the buffer showing the reviews panel."
   :package-version '(herdr . "0.1.0")
-  :group 'herdr-tuicr
+  :group 'herdr-review
   :type 'string)
 
-(defcustom herdr-tuicr-border t
+(defcustom herdr-review-border t
   "Whether to rule the reviews panel off from the panel above it.
 The panels share a column with no mode line between them, so without a
 rule they read as one list under several headings."
   :package-version '(herdr . "0.1.0")
-  :group 'herdr-tuicr
+  :group 'herdr-review
   :type 'boolean)
 
-(defcustom herdr-tuicr-icon "⌥"
+(defcustom herdr-review-icon "⌥"
   "Glyph shown beside a review, in place of the agent kind."
   :package-version '(herdr . "0.1.0")
-  :group 'herdr-tuicr
+  :group 'herdr-review
   :type 'string)
 
 ;;; Faces
 
-(defface herdr-tuicr-icon
+(defface herdr-review-icon
   '((((background dark)) :foreground "#7aa2f7")
     (((background light)) :foreground "#2f5fbf")
     (t :inherit font-lock-keyword-face))
   "Face for the mark beside a review."
-  :group 'herdr-tuicr)
+  :group 'herdr-review)
 
 ;;; Keymaps
 
-(defvar-keymap herdr-tuicr-mode-map
-  :doc "Keymap for `herdr-tuicr-mode'."
+(defvar-keymap herdr-review-mode-map
+  :doc "Keymap for `herdr-review-mode'."
   :parent herdr-panel-mode-map
-  "+" #'herdr-tuicr-open
-  "-" #'herdr-tuicr-close)
+  "+" #'herdr-review-open
+  "-" #'herdr-review-close)
 
 (with-eval-after-load 'evil
-  (herdr-panel-install-evil-keys herdr-tuicr-mode-map))
+  (herdr-panel-install-evil-keys herdr-review-mode-map))
 
 ;;; Mode
 
-(define-derived-mode herdr-tuicr-mode magit-section-mode "Herdr Reviews"
+(define-derived-mode herdr-review-mode magit-section-mode "Herdr Reviews"
   "Major mode for the herdr reviews panel."
   :interactive nil
-  (herdr-panel-init #'herdr-tuicr-refresh #'herdr-tuicr--pane-at-point))
+  (herdr-panel-init #'herdr-review-refresh #'herdr-review--pane-at-point))
 
 ;;; Commands
 
 ;;;###autoload
-(defun herdr-tuicr-reviews ()
+(defun herdr-review ()
   "Show the panel listing the reviews waiting to be read."
   (interactive)
-  (pop-to-buffer (herdr-tuicr-panel)))
+  (pop-to-buffer (herdr-review-panel)))
 
-(defun herdr-tuicr-panel ()
+(defun herdr-review-panel ()
   "Return the reviews buffer, drawn and tracking the session.
-Separate from `herdr-tuicr-reviews' so that a caller arranging its own
+Separate from `herdr-review' so that a caller arranging its own
 windows does not have to undo a `pop-to-buffer' first.  This is the
 form `herdr-ui-panels' names to put the panel in a column."
-  (let ((buffer (get-buffer-create herdr-tuicr-buffer-name)))
+  (let ((buffer (get-buffer-create herdr-review-buffer-name)))
     (with-current-buffer buffer
-      (unless (derived-mode-p 'herdr-tuicr-mode)
-        (herdr-tuicr-mode))
+      (unless (derived-mode-p 'herdr-review-mode)
+        (herdr-review-mode))
       (herdr-panel-watch)
-      (herdr-tuicr-refresh))
+      (herdr-review-refresh))
     buffer))
 
-(defun herdr-tuicr-refresh ()
+(defun herdr-review-refresh ()
   "Redraw the reviews panel from the session tree."
   (interactive)
-  (with-current-buffer (get-buffer-create herdr-tuicr-buffer-name)
+  (with-current-buffer (get-buffer-create herdr-review-buffer-name)
     (herdr-panel-with-redraw
-      (magit-insert-section (herdr-tuicr-root)
+      (magit-insert-section (herdr-review-root)
         (herdr-panel-insert-title
-         "Reviews" (and herdr-tuicr-border 'herdr-panel-border))
-        (let ((reviews (herdr-tuicr-reviews-list))
+         "Reviews" (and herdr-review-border 'herdr-panel-border))
+        (let ((reviews (herdr-review-list))
               (current (herdr-panel-current-pane)))
           (if reviews
               (dolist (review reviews)
-                (herdr-tuicr--insert review current))
+                (herdr-review--insert review current))
             (insert (propertize "  nothing to review\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))
 
 ;;;###autoload
-(defun herdr-tuicr-open (&optional workspace)
+(defun herdr-review-open (&optional workspace)
   "Open a review of WORKSPACE, or go to the one it already has.
 WORKSPACE defaults to the one holding the row at point, and failing
 that the one holding the pane you are looking at.  The review runs in
 a tab of its own, and this shows that tab's terminal here."
-  (interactive (list (herdr-tuicr--workspace-at-point)))
-  (let ((workspace (or workspace (herdr-tuicr--current-workspace))))
+  (interactive (list (herdr-review--workspace-at-point)))
+  (let ((workspace (or workspace (herdr-review--current-workspace))))
     (unless workspace
       (user-error "No workspace to review"))
-    (let ((pane (herdr-tuicr--run "open" "--workspace" workspace)))
+    (let ((pane (herdr-review--run "open" "--workspace" workspace)))
       (herdr-session-refresh 'force)
       (when pane
         (herdr-panel-open-pane pane 'control)))))
 
 ;;;###autoload
-(defun herdr-tuicr-close (&optional workspace)
+(defun herdr-review-close (&optional workspace)
   "End the review of WORKSPACE, closing its tab.
-WORKSPACE defaults the same way as in `herdr-tuicr-open'.  The review
-ends itself when you quit the tuicr TUI, so this is for the one you
+WORKSPACE defaults the same way as in `herdr-review-open'.  The review
+ends itself when you quit the review tool, so this is for the one you
 walked away from."
-  (interactive (list (herdr-tuicr--workspace-at-point)))
-  (let ((workspace (or workspace (herdr-tuicr--current-workspace))))
+  (interactive (list (herdr-review--workspace-at-point)))
+  (let ((workspace (or workspace (herdr-review--current-workspace))))
     (unless workspace
       (user-error "No workspace whose review to close"))
-    (herdr-tuicr--run "close" "--workspace" workspace)
+    (herdr-review--run "close" "--workspace" workspace)
     (herdr-session-refresh 'force)))
 
 ;;; Reading the Session
 
-(defun herdr-tuicr-reviews-list ()
+(defun herdr-review-list ()
   "Return the reviews herdr is reporting, the ones waiting first.
-A review is an agent of kind `herdr-tuicr-agent', which is what the
+A review is an agent of kind `herdr-review-agent', which is what the
 herdr-review script reports each one as."
   (seq-sort-by (lambda (review)
                  (herdr-session-status-priority
@@ -202,16 +207,16 @@ herdr-review script reports each one as."
                #'>
                (seq-filter (lambda (agent)
                              (equal (gethash "agent" agent)
-                                    herdr-tuicr-agent))
+                                    herdr-review-agent))
                            (herdr-session-agents))))
 
-(defun herdr-tuicr--current-workspace ()
+(defun herdr-review--current-workspace ()
   "Return the workspace holding the pane you are looking at, or nil."
   (when-let* ((pane-id (herdr-panel-current-pane))
               (pane (herdr-session-pane pane-id)))
     (gethash "workspace_id" pane)))
 
-(defun herdr-tuicr--workspace-at-point ()
+(defun herdr-review--workspace-at-point ()
   "Return the workspace of the row at point, or nil when there is none.
 Asked of the panel rather than read off the row, through the function
 every panel gives `herdr-panel-init': a spaces row, an agent row and a
@@ -225,28 +230,28 @@ is this file's business."
 
 ;;; Rendering
 
-(defun herdr-tuicr--insert (review current)
+(defun herdr-review--insert (review current)
   "Insert an entry for REVIEW, emphasised against the CURRENT pane.
 The workspace names the row, because one review per workspace makes
 the workspace the thing being reviewed.  What is under review goes
 beneath it, as the script counted it when the review opened."
   (let ((pane (gethash "pane_id" review)))
-    (magit-insert-section (herdr-tuicr-review pane)
+    (magit-insert-section (herdr-review-entry pane)
       (herdr-panel-insert-entry
        (list :status (gethash "agent_status" review)
              :emphasis (herdr-panel-emphasis pane current)
-             :label (herdr-tuicr--label review)
-             :aside (herdr-panel-text herdr-tuicr-icon 'herdr-tuicr-icon)
-             :detail (herdr-tuicr--summary review))))))
+             :label (herdr-review--label review)
+             :aside (herdr-panel-text herdr-review-icon 'herdr-review-icon)
+             :detail (herdr-review--summary review))))))
 
-(defun herdr-tuicr--label (review)
+(defun herdr-review--label (review)
   "Return the name of the workspace REVIEW is reviewing."
   (let ((id (gethash "workspace_id" review)))
     (or (when-let* ((workspace (herdr-session-workspace id)))
           (gethash "label" workspace))
         id)))
 
-(defun herdr-tuicr--summary (review)
+(defun herdr-review--summary (review)
   "Return the note REVIEW carries about what is waiting, or nil.
 The script puts this on the pane as a display-only metadata token, so
 it is herdr's own word for it rather than something read back out of
@@ -254,26 +259,26 @@ the terminal."
   (when-let* ((tokens (gethash "tokens" review)))
     (gethash "summary" tokens)))
 
-(defun herdr-tuicr--pane-at-point ()
+(defun herdr-review--pane-at-point ()
   "Return the pane of the row at point, or signal when there is none."
   (let ((section (magit-current-section)))
     (or (and section
-             (eq (oref section type) 'herdr-tuicr-review)
+             (eq (oref section type) 'herdr-review-entry)
              (oref section value))
         (user-error "No review at point"))))
 
 ;;; Running the Script
 
-(defun herdr-tuicr--run (&rest arguments)
+(defun herdr-review--run (&rest arguments)
   "Run the herdr-review script with ARGUMENTS and return the pane it names.
 Signals when the script is missing or fails, with what it printed on
 its error stream, because a review that silently did not open looks
 the same as one nobody asked for."
-  (unless (executable-find herdr-tuicr-program)
-    (user-error "Cannot find %s; set `herdr-tuicr-program'"
-                herdr-tuicr-program))
+  (unless (executable-find herdr-review-program)
+    (user-error "Cannot find %s; set `herdr-review-program'"
+                herdr-review-program))
   (with-temp-buffer
-    (let ((status (apply #'call-process herdr-tuicr-program nil t nil
+    (let ((status (apply #'call-process herdr-review-program nil t nil
                          arguments)))
       (unless (eq status 0)
         (user-error "Cannot %s the review: %s" (car arguments)
@@ -290,11 +295,11 @@ the same as one nobody asked for."
 ;; for, and asking for it on load rather than in the user's configuration
 ;; is what makes requiring this file the whole of the setup.
 
-(add-to-list 'herdr-agents-hidden-kinds herdr-tuicr-agent)
+(add-to-list 'herdr-agents-hidden-kinds herdr-review-agent)
 
 ;;; _
-(provide 'herdr-tuicr)
+(provide 'herdr-review)
 ;; Local Variables:
 ;; indent-tabs-mode: nil
 ;; End:
-;;; herdr-tuicr.el ends here
+;;; herdr-review.el ends here

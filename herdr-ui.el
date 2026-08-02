@@ -32,7 +32,7 @@
 ;; and `delete-other-windows' in the terminal leaves the layout standing.
 
 ;; What the column holds is `herdr-ui-panels': spaces, then agents, then
-;; reviews.  Reviews is optional, because `herdr-tuicr' needs a tool herdr
+;; reviews.  Reviews is optional, because `herdr-review' needs a tool herdr
 ;; does not, so its entry is skipped until that file is loaded.
 
 ;; The tabs of the terminal's workspace ride on its tab line rather than
@@ -78,7 +78,7 @@
 (defcustom herdr-ui-panels
   '((herdr-spaces-panel . 3)
     (herdr-agents-panel . 2)
-    (herdr-tuicr-panel . 1))
+    (herdr-review-panel . 1))
   "The panels stacked in the column, top to bottom.
 Each entry is (FUNCTION . WEIGHT).  FUNCTION takes no arguments and
 returns the panel's buffer, drawn and tracking the session; WEIGHT is
@@ -91,7 +91,7 @@ under review and usually none.
 
 An entry whose function is undefined is skipped rather than an error,
 which is how an optional panel keeps its place in the order without
-costing anything.  Reviews is one: `herdr-tuicr' is not loaded with the
+costing anything.  Reviews is one: `herdr-review' is not loaded with the
 rest of herdr, because it needs a tool herdr does not."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
@@ -100,7 +100,7 @@ rest of herdr, because it needs a tool herdr does not."
 (make-obsolete-variable 'herdr-ui-spaces-height 'herdr-ui-panels
                         "herdr 0.1.0")
 
-(declare-function herdr-tuicr-panel "herdr-tuicr" ())
+(declare-function herdr-review-panel "herdr-review" ())
 
 (defcustom herdr-ui-tame-window-packages t
   "Whether to ask window-managing packages to leave the layout alone.
