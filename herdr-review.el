@@ -67,7 +67,7 @@
 Named rather than reimplemented so that a review begun from Emacs, from
 a shell, or by a coding agent is the same review, and so that which
 review tool actually runs is that script's business rather than this
-file's.  It ships apart from herdr, in the herdr-tuicr project; put its
+file's.  It ships apart from herdr, in the herdr-review project; put its
 full path here when that project's `bin' directory is not on the
 variable `exec-path'."
   :package-version '(herdr . "0.1.0")
