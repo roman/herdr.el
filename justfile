@@ -1,8 +1,12 @@
 # herdr.el task runner
 
 emacs := env_var_or_default("EMACS", "emacs")
-lisp := "herdr-api.el herdr-session.el herdr-panel.el herdr-agents.el herdr-spaces.el herdr-term.el herdr-ui.el herdr-review.el"
-tests := "test/herdr-api-tests.el test/herdr-session-tests.el test/herdr-panel-tests.el test/herdr-agents-tests.el test/herdr-term-tests.el test/herdr-ui-tests.el test/herdr-review-tests.el"
+# Globs rather than a list: a new file only has to be named once, in
+# itself, and the two directories hold nothing but the package and its
+# suites.  What the list used to carry besides the names was an order,
+# which the recipes below no longer depend on.
+lisp := "*.el"
+tests := "test/*.el"
 
 # List the available recipes
 default:
@@ -28,9 +32,13 @@ test: build
     #!/usr/bin/env bash
     set -euo pipefail
     load_path=$({{ just_executable() }} _load-path)
+    # `require' rather than `-l': a suite that pulls in another one's
+    # fixtures has already provided it, and loading the file again would
+    # redefine every test in it, which ERT refuses. That made the order of
+    # this list load-bearing; it no longer is.
     load=()
     for file in {{ tests }}; do
-        load+=(-l "$(basename "$file" .el)")
+        load+=(--eval "(require '$(basename "$file" .el))")
     done
     {{ emacs }} -Q --batch $load_path -L test \
         "${load[@]}" -f ert-run-tests-batch-and-exit
@@ -40,9 +48,13 @@ test-interactive: build
     #!/usr/bin/env bash
     set -euo pipefail
     load_path=$({{ just_executable() }} _load-path)
+    # `require' rather than `-l': a suite that pulls in another one's
+    # fixtures has already provided it, and loading the file again would
+    # redefine every test in it, which ERT refuses. That made the order of
+    # this list load-bearing; it no longer is.
     load=()
     for file in {{ tests }}; do
-        load+=(-l "$(basename "$file" .el)")
+        load+=(--eval "(require '$(basename "$file" .el))")
     done
     {{ emacs }} -Q $load_path -L test "${load[@]}" --eval '(ert t)'
 
