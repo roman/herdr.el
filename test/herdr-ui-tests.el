@@ -19,11 +19,10 @@
 
 ;;; Commentary:
 
-;; The column is a list of panels and the weight each takes of it, and a
-;; package outside herdr may add to it.  What is worth testing is the
-;; arithmetic that turns weights into shares, and the promise that a
-;; registration survives a package being loaded twice and a user having
-;; customized the option beside it.
+;; The column is a list of panels and the weight each takes of it, and an
+;; entry may name a panel from a file that is not loaded.  What is worth
+;; testing is the arithmetic that turns weights into shares, and that an
+;; optional panel costs nothing while its file is absent.
 
 ;; Windows are never made: `herdr-ui--display' is replaced, so a test says
 ;; what the layout would be rather than building one on a batch frame.
@@ -42,13 +41,12 @@
 Each entry has the form (BUFFER-NAME SLOT . HEIGHT).")
 
 (defmacro herdr-ui-with-layout (&rest body)
-  "Evaluate BODY with the panel registry empty and no windows made.
-`herdr-ui-tests--shown' collects what the layout asked for.  Both
-panel variables are restored afterwards, so a test cannot leak a
-registration into the next one."
+  "Evaluate BODY with the column empty and no windows made.
+`herdr-ui-tests--shown' collects what the layout asked for.
+`herdr-ui-panels' is restored afterwards, so a test cannot leak a
+panel into the next one."
   (declare (indent 0) (debug t))
   `(let ((herdr-ui-panels nil)
-         (herdr-ui--added-panels nil)
          (herdr-ui-tests--shown nil))
      (cl-letf (((symbol-function 'herdr-ui--display)
                 (lambda (buffer slot height)
@@ -65,55 +63,41 @@ registration into the next one."
   "Return a function standing in for a panel whose buffer is called NAME."
   (lambda () (get-buffer-create name)))
 
-;;; Registering A Panel
+;;; Leaving Out A Panel That Is Not Loaded
 
-(ert-deftest herdr-ui-add-panel:appends-below-the-configured-ones ()
-  "A package's panel goes under herdr's own, not among them.
-Order in the column is the reading order, and a package cannot know
-what belongs above it."
+(ert-deftest herdr-ui--show-panels:skips-an-undefined-panel ()
+  "An entry naming a file that is not loaded is passed over.
+This is what lets an optional panel keep its place in the order at no
+cost: `herdr-tuicr' is not loaded with the rest of herdr, and the
+layout must stand without it rather than signal."
   (herdr-ui-with-layout
-    (setq herdr-ui-panels '((spaces . 3) (agents . 2)))
-    (herdr-ui-add-panel 'extra 1)
-    (should (equal herdr-ui-panels '((spaces . 3) (agents . 2))))
-    (should (equal herdr-ui--added-panels '((extra . 1))))))
-
-(ert-deftest herdr-ui-add-panel:is-idempotent ()
-  "Loading a package twice leaves one panel, not two.
-A package registers from its own load, which happens again on every
-recompile and on any `load-file'."
-  (herdr-ui-with-layout
-    (herdr-ui-add-panel 'extra 1)
-    (herdr-ui-add-panel 'extra 5)
-    (should (equal herdr-ui--added-panels '((extra . 1))))))
-
-(ert-deftest herdr-ui-add-panel:defaults-to-the-smallest-share ()
-  "A panel that does not say how much room it wants asks for little."
-  (herdr-ui-with-layout
-    (herdr-ui-add-panel 'extra)
-    (should (equal herdr-ui--added-panels '((extra . 1))))))
-
-(ert-deftest herdr-ui-add-panel:survives-a-customized-option ()
-  "Customize writing `herdr-ui-panels' cannot drop a registration.
-This is why the two are separate variables: `custom-set-variables'
-runs whenever the user's custom file is read, which may be after the
-package that registered."
-  (herdr-ui-with-layout
-    (herdr-ui-add-panel (herdr-ui-tests--panel "extra") 1)
-    (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 1)))
+    (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 1)
+                            (herdr-ui-tests--panel-that-is-not-defined . 1)))
     (herdr-ui--show-panels)
-    (should (equal (mapcar #'car herdr-ui-tests--shown)
-                   '("spaces" "extra")))))
+    (should (equal (mapcar #'car herdr-ui-tests--shown) '("spaces")))))
+
+(ert-deftest herdr-ui--show-panels:shares-out-what-a-missing-panel-left ()
+  "The panels that are there divide the whole column between them.
+A skipped entry must not leave a gap, or an uninstalled optional panel
+would cost room for nothing."
+  (herdr-ui-with-layout
+    (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 3)
+                            (,(herdr-ui-tests--panel "agents") . 2)
+                            (herdr-ui-tests--panel-that-is-not-defined . 1)))
+    (herdr-ui--show-panels)
+    (should (equal (mapcar #'cddr herdr-ui-tests--shown)
+                   (list (/ 3.0 5) (/ 2.0 5))))))
 
 ;;; Sharing The Column
 
 (ert-deftest herdr-ui--show-panels:divides-the-column-by-weight ()
   "Weights are shares of their own total, not fractions of the frame.
-That is what lets a package add a panel without every other weight
-having to be rewritten."
+That is what lets a panel be added without every other weight having to
+be rewritten."
   (herdr-ui-with-layout
     (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 3)
-                            (,(herdr-ui-tests--panel "agents") . 2)))
-    (herdr-ui-add-panel (herdr-ui-tests--panel "extra") 1)
+                            (,(herdr-ui-tests--panel "agents") . 2)
+                            (,(herdr-ui-tests--panel "reviews") . 1)))
     (herdr-ui--show-panels)
     (should (equal (mapcar #'cddr herdr-ui-tests--shown)
                    (list (/ 3.0 6) (/ 2.0 6) (/ 1.0 6))))))

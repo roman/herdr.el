@@ -31,9 +31,9 @@
 ;; ordinary display of a file or a help buffer cannot land in one of them
 ;; and `delete-other-windows' in the terminal leaves the layout standing.
 
-;; What the column holds is `herdr-ui-panels', which starts as spaces
-;; above agents.  A package with a panel of its own adds it there and this
-;; file needs to know nothing about it.
+;; What the column holds is `herdr-ui-panels': spaces, then agents, then
+;; reviews.  Reviews is optional, because `herdr-tuicr' needs a tool herdr
+;; does not, so its entry is skipped until that file is loaded.
 
 ;; The tabs of the terminal's workspace ride on its tab line rather than
 ;; in a window of their own.  A window would cost a mode line and a border
@@ -77,20 +77,22 @@
 
 (defcustom herdr-ui-panels
   '((herdr-spaces-panel . 3)
-    (herdr-agents-panel . 2))
+    (herdr-agents-panel . 2)
+    (herdr-tuicr-panel . 1))
   "The panels stacked in the column, top to bottom.
 Each entry is (FUNCTION . WEIGHT).  FUNCTION takes no arguments and
 returns the panel's buffer, drawn and tracking the session; WEIGHT is
 that panel's share of the column, counted against the weights of the
-other panels rather than as a fraction, so that removing one leaves
-the rest in proportion.  Spaces outweighs agents because it lists
-every workspace, while agents lists only the panes herdr found one
-running in.
+other panels rather than as a fraction, so that leaving one out leaves
+the rest in proportion.  Spaces outweighs agents because it lists every
+workspace, while agents lists only the panes herdr found one running
+in, and reviews is smaller again because it holds a row per workspace
+under review and usually none.
 
-A panel from another package is not listed here.  It registers itself
-with `herdr-ui-add-panel' and appears under these; keeping the two
-apart is what stops a value saved by \\[customize] from dropping a
-registration made before it was read."
+An entry whose function is undefined is skipped rather than an error,
+which is how an optional panel keeps its place in the order without
+costing anything.  Reviews is one: `herdr-tuicr' is not loaded with the
+rest of herdr, because it needs a tool herdr does not."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
   :type '(alist :key-type function :value-type number))
@@ -98,20 +100,7 @@ registration made before it was read."
 (make-obsolete-variable 'herdr-ui-spaces-height 'herdr-ui-panels
                         "herdr 0.1.0")
 
-(defvar herdr-ui--added-panels nil
-  "Panels other packages have added, in the order they added them.
-Each entry has the same (FUNCTION . WEIGHT) form as `herdr-ui-panels',
-and they follow it in the column.")
-
-(defun herdr-ui-add-panel (function &optional weight)
-  "Put the panel FUNCTION at the foot of the column, taking WEIGHT of it.
-WEIGHT defaults to 1, which is the share for a panel that is usually a
-heading and a row or two.  Does nothing when FUNCTION is already
-registered, so that a package may call this each time it is loaded."
-  (unless (assq function herdr-ui--added-panels)
-    (setq herdr-ui--added-panels
-          (append herdr-ui--added-panels
-                  (list (cons function (or weight 1)))))))
+(declare-function herdr-tuicr-panel "herdr-tuicr" ())
 
 (defcustom herdr-ui-tame-window-packages t
   "Whether to ask window-managing packages to leave the layout alone.
@@ -203,8 +192,13 @@ fraction of the width it was just given."
             (window-list frame)))
 
 (defun herdr-ui--show-panels ()
-  "Put the panels in their column, added ones under configured ones."
-  (let* ((panels (append herdr-ui-panels herdr-ui--added-panels))
+  "Put the panels of `herdr-ui-panels' in their column, in order.
+An entry whose function is not defined is left out, and the weights of
+the rest are shared over what is left."
+  ;; `functionp' rather than `fboundp', which signals on anything but a
+  ;; symbol: an entry may be a function rather than a name for one.
+  (let* ((panels (seq-filter (lambda (panel) (functionp (car panel)))
+                             herdr-ui-panels))
          (total (float (apply #'+ 0 (mapcar #'cdr panels))))
          (slot 0))
     (dolist (panel panels)
