@@ -383,6 +383,206 @@ before initial full frame\" for every frame that follows."
     (herdr-term--send-input "ls\r")
     (should (null herdr-term-test-sent))))
 
+;;; Input Diversion
+
+(defvar herdr-term-test-diverted nil
+  "Strings handed to `herdr-term--send-input', most recent first.")
+
+(defvar herdr-term-test-piped nil
+  "Strings that reached the bridge process, most recent first.")
+
+(defun herdr-term-test-await-pipe ()
+  "Wait for the bridge to echo, up to a tenth of a second.
+A diverted write never reaches the pipe and so never echoes, and there
+the wait runs to its timeout and leaves the absence the test asserts."
+  (let ((attempts 20))
+    (while (and (null herdr-term-test-piped) (> attempts 0))
+      (accept-process-output nil 0.005)
+      (setq attempts (1- attempts)))))
+
+(defun herdr-term-test-restore-advice (advised)
+  "Put the divert back in the state ADVISED recorded before a test.
+`advice-add' is idempotent, so re-adding an advice the test left in
+place is a no-op, and only a test that removed it pays anything here."
+  (if advised
+      (advice-add 'process-send-string :around #'herdr-term--divert-input)
+    (advice-remove 'process-send-string #'herdr-term--divert-input)))
+
+(defmacro herdr-term-with-test-bridge (&rest body)
+  "Evaluate BODY with `bridge', a tagged input bridge, and `buffer' bound.
+The bridge is a real `cat', as the live one is, so that a write which
+reaches the pipe comes back to the filter and is seen.  Nothing else
+would tell a diverted write apart from one that was merely dropped.
+BODY may read `herdr-term-test-diverted' and `herdr-term-test-piped'.
+
+Whatever BODY does to the advice, the previous state is restored, so
+that one test cannot decide whether the next one runs advised."
+  (declare (indent 0) (debug t))
+  `(let* ((buffer (generate-new-buffer " *herdr-term-bridge-test*"))
+          (bridge (make-process
+                   :name "herdr-term-bridge-test"
+                   :buffer nil
+                   :command '("cat")
+                   :connection-type 'pipe
+                   :coding 'binary
+                   :noquery t
+                   :filter (lambda (_process string)
+                             (push string herdr-term-test-piped))))
+          (advised (advice-member-p #'herdr-term--divert-input
+                                    'process-send-string))
+          (herdr-term-test-diverted nil)
+          (herdr-term-test-piped nil))
+     (process-put bridge 'herdr-term-input-buffer buffer)
+     (unwind-protect
+         (cl-letf (((symbol-function 'herdr-term--send-input)
+                    (lambda (string) (push string herdr-term-test-diverted))))
+           (with-current-buffer buffer ,@body))
+       (herdr-term-test-restore-advice advised)
+       (delete-process bridge)
+       (kill-buffer buffer))))
+
+(ert-deftest herdr-term--input-target:recognizes-only-a-bridge ()
+  "A process speaks for a herdr buffer only once it is tagged with one."
+  (herdr-term-with-test-bridge
+    (should (eq (herdr-term--input-target bridge) buffer))
+    (let ((stranger (make-pipe-process :name "herdr-term-stranger-test"
+                                       :noquery t
+                                       :filter #'ignore)))
+      (unwind-protect
+          (should-not (herdr-term--input-target stranger))
+        (delete-process stranger)))
+    (should-not (herdr-term--input-target nil))))
+
+(ert-deftest herdr-term--input-target:forgets-a-dead-buffer ()
+  "A bridge outliving its buffer stops claiming input for it."
+  (herdr-term-with-test-bridge
+    (let ((orphan (generate-new-buffer " *herdr-term-orphan-test*")))
+      (process-put bridge 'herdr-term-input-buffer orphan)
+      (kill-buffer orphan)
+      (should-not (herdr-term--input-target bridge)))))
+
+(ert-deftest herdr-term--divert-input:bypasses-the-bridge ()
+  "A bridge write reaches herdr directly and never enters the pipe."
+  (herdr-term-with-test-bridge
+    (let ((sent nil))
+      (herdr-term--divert-input (lambda (&rest args) (push args sent))
+                                bridge "ls\r")
+      (should (equal herdr-term-test-diverted '("ls\r")))
+      (should (null sent)))))
+
+(ert-deftest herdr-term--divert-input:diverts-into-the-owning-buffer ()
+  "The forward runs in the bridge's buffer, not in whatever was current."
+  (herdr-term-with-test-bridge
+    (let ((seen nil))
+      (cl-letf (((symbol-function 'herdr-term--send-input)
+                 (lambda (_string) (setq seen (current-buffer)))))
+        (with-temp-buffer
+          (herdr-term--divert-input #'ignore bridge "x")))
+      (should (eq seen buffer)))))
+
+(ert-deftest herdr-term--divert-input:leaves-other-processes-alone ()
+  "An untagged process keeps the sink `process-send-string' gave it."
+  (herdr-term-with-test-bridge
+    (let ((stranger (make-pipe-process :name "herdr-term-stranger-test"
+                                       :noquery t
+                                       :filter #'ignore))
+          (sent nil))
+      (unwind-protect
+          (progn
+            (herdr-term--divert-input
+             (lambda (process string) (push (cons process string) sent))
+             stranger "ls\r")
+            (should (equal sent (list (cons stranger "ls\r"))))
+            (should (null herdr-term-test-diverted)))
+        (delete-process stranger)))))
+
+(ert-deftest herdr-term--divert-input:reports-a-failed-send ()
+  "A signal from the forward is demoted to a message, not raised.
+ghostel discards any signal but `quit' that reaches its module, so
+raising would lose the keystroke with nothing said anywhere."
+  (herdr-term-with-test-bridge
+    (let ((reported nil))
+      (cl-letf (((symbol-function 'herdr-term--send-input)
+                 (lambda (_string) (error "Stream is gone")))
+                ((symbol-function 'message)
+                 (lambda (format &rest args)
+                   (setq reported (apply #'format-message format args)))))
+        (herdr-term--divert-input #'ignore bridge "x"))
+      (should (string-match-p "Stream is gone" reported)))))
+
+(ert-deftest herdr-term--divert-input:catches-a-real-send ()
+  "Installed as advice, the divert intercepts an ordinary send call.
+This is the property the module's own key encoder relies on: it writes
+to `ghostel--process' with `process-send-string' and cannot be reached
+any other way."
+  (herdr-term-with-test-bridge
+    ;; Unadvised first, so that the silent pipe below is evidence the
+    ;; advice did something rather than evidence the pipe is deaf.  The
+    ;; session may already be advised, so say so rather than assume it.
+    (advice-remove 'process-send-string #'herdr-term--divert-input)
+    (process-send-string bridge "\e[A")
+    (herdr-term-test-await-pipe)
+    (should (equal herdr-term-test-piped '("\e[A")))
+    (should (null herdr-term-test-diverted))
+    (setq herdr-term-test-piped nil)
+    (advice-add 'process-send-string :around #'herdr-term--divert-input)
+    (process-send-string bridge "\e[B")
+    (herdr-term-test-await-pipe)
+    (should (equal herdr-term-test-diverted '("\e[B")))
+    (should (null herdr-term-test-piped))))
+
+(ert-deftest herdr-term--ensure-input-bridge:tags-the-bridge-and-advises ()
+  "Setting up a bridge tags it and installs the divert.
+A second setup reuses the live bridge rather than forking another."
+  (let ((buffer (generate-new-buffer " *herdr-term-setup-test*"))
+        (advised (advice-member-p #'herdr-term--divert-input
+                                  'process-send-string)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq herdr-term--pane "w1:p1")
+          (herdr-term--ensure-input-bridge)
+          (should (eq ghostel--process herdr-term--input-bridge))
+          (should (eq (herdr-term--input-target herdr-term--input-bridge)
+                      buffer))
+          (should (advice-member-p #'herdr-term--divert-input
+                                   'process-send-string))
+          (let ((bridge herdr-term--input-bridge))
+            (herdr-term--ensure-input-bridge)
+            (should (eq herdr-term--input-bridge bridge))))
+      (with-current-buffer buffer
+        (herdr-term--kill-input-bridge))
+      (herdr-term-test-restore-advice advised)
+      (kill-buffer buffer))))
+
+(ert-deftest herdr-term--kill-input-bridge:retires-the-last-divert ()
+  "The divert outlives one bridge and dies with the last of them.
+Left installed, it would filter every `process-send-string' an Emacs
+makes long after the last herdr buffer is gone."
+  (skip-unless (not (herdr-term--input-bridge-live-p)))
+  (let ((first (generate-new-buffer " *herdr-term-first-test*"))
+        (second (generate-new-buffer " *herdr-term-second-test*"))
+        (advised (advice-member-p #'herdr-term--divert-input
+                                  'process-send-string)))
+    (unwind-protect
+        (progn
+          (dolist (buffer (list first second))
+            (with-current-buffer buffer
+              (setq herdr-term--pane "w1:p1")
+              (herdr-term--ensure-input-bridge)))
+          (with-current-buffer first
+            (herdr-term--kill-input-bridge))
+          (should (advice-member-p #'herdr-term--divert-input
+                                   'process-send-string))
+          (with-current-buffer second
+            (herdr-term--kill-input-bridge))
+          (should-not (advice-member-p #'herdr-term--divert-input
+                                       'process-send-string)))
+      (dolist (buffer (list first second))
+        (with-current-buffer buffer
+          (herdr-term--kill-input-bridge))
+        (kill-buffer buffer))
+      (herdr-term-test-restore-advice advised))))
+
 ;;; Scrolling
 
 (ert-deftest herdr-term-scroll:sends-a-wheel-scroll ()

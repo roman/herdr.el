@@ -837,15 +837,59 @@ redisplay runs this with an arbitrary buffer current."
 
 ;;; Input
 
+(defun herdr-term--input-target (process)
+  "Return the herdr terminal buffer PROCESS accepts input for, or nil.
+Only an input bridge carries `herdr-term-input-buffer', so every other
+process in the session reads as nil and is left to its own sink.  The
+control stream carries `herdr-term-buffer' instead, and the two tags
+must stay distinct: were the stream to answer here, the write
+`herdr-term--send-input' makes would divert into itself."
+  (and (processp process)
+       (let ((buffer (process-get process 'herdr-term-input-buffer)))
+         (and (buffer-live-p buffer) buffer))))
+
+(defun herdr-term--divert-input (send process string)
+  "Send STRING to herdr directly when PROCESS is an input bridge.
+Otherwise hand PROCESS and STRING to SEND, the advised
+`process-send-string'.
+
+Diverting is what keeps a keystroke inside the command that read it.
+Left to the bridge, the bytes travel down a pipe and come back through a
+process filter, and Emacs runs that filter only once its event loop
+notices the descriptor.  That wait costs a fraction of a millisecond
+under X11 and around twelve under the Cocoa event loop, on every
+keystroke.  The bridge stays live because ghostel requires a process in
+`ghostel--process', and because it still carries any write that reaches
+the pipe by a path this advice does not see.
+
+A device report the terminal raises mid-repaint reaches here too, from
+inside the send that is painting.  Emacs queues writes per process and
+drains them in order, so the nested line follows the outer one whole
+rather than splitting it.
+
+Errors are demoted because ghostel discards any signal but `quit' that
+crosses back into its module, so a raised one would lose the keystroke
+without a word."
+  (if-let* ((buffer (herdr-term--input-target process)))
+      (with-current-buffer buffer
+        (with-demoted-errors "herdr-term: input dropped: %S"
+          (herdr-term--send-input string)))
+    (funcall send process string)))
+
 (defun herdr-term--ensure-input-bridge ()
   "Point `ghostel--process' at a live bridge to the control stream.
 ghostel drives input the way any terminal does: its handlers and its
 module key encoder write bytes to the terminal's PTY, which with no
 native process is whatever `ghostel--process' holds.  Setting that to a
-`cat' process and forwarding what ghostel writes to it is what makes
-every input path work alike, including the encoder paths for backspace,
-arrows and function keys that write inside the module and so cannot be
-intercepted by advising a send function or rebinding a key.
+`cat' process is what makes every input path work alike, including the
+encoder paths for backspace, arrows and function keys that write inside
+the module and so cannot be reached by rebinding a key.
+
+Those module writes are ordinary `process-send-string' calls, so
+`herdr-term--divert-input' forwards them without the round trip through
+the bridge.  The bridge is what makes the paths uniform; the advice is
+what makes them prompt.  The advice outlives any one buffer and is
+retired by `herdr-term--kill-input-bridge' with the last bridge.
 
 This is idempotent, and must run after every `ghostel--init-buffer',
 which resets `ghostel--process' to nil."
@@ -862,15 +906,29 @@ which resets `ghostel--process' to nil."
              :filter (lambda (_process bytes)
                        (when (buffer-live-p buffer)
                          (with-current-buffer buffer
-                           (herdr-term--send-input bytes))))))))
+                           (herdr-term--send-input bytes))))))
+      (process-put herdr-term--input-bridge 'herdr-term-input-buffer buffer)))
+  (advice-add 'process-send-string :around #'herdr-term--divert-input)
   (setq ghostel--process herdr-term--input-bridge))
 
+(defun herdr-term--input-bridge-live-p ()
+  "Return non-nil while a live input bridge remains in any buffer."
+  (seq-some (lambda (buffer)
+              (process-live-p
+               (buffer-local-value 'herdr-term--input-bridge buffer)))
+            (buffer-list)))
+
 (defun herdr-term--kill-input-bridge ()
-  "Delete this buffer's input bridge, releasing `ghostel--process'."
+  "Delete this buffer's input bridge, releasing `ghostel--process'.
+Retire the divert with the last bridge in the session, so that an Emacs
+that is done with herdr stops filtering every `process-send-string' it
+makes."
   (when (process-live-p herdr-term--input-bridge)
     (delete-process herdr-term--input-bridge))
   (setq herdr-term--input-bridge nil
-        ghostel--process nil))
+        ghostel--process nil)
+  (unless (herdr-term--input-bridge-live-p)
+    (advice-remove 'process-send-string #'herdr-term--divert-input)))
 
 (defun herdr-term--send-command (command)
   "Write COMMAND, a plist, to the control stream as one JSON line."
