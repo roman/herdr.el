@@ -93,6 +93,20 @@ A reconnect requested sooner than this is deferred, never dropped."
   :group 'herdr-term
   :type 'number)
 
+(defcustom herdr-term-pane-gone-action 'kill
+  "What becomes of a terminal buffer whose pane herdr no longer has.
+A pane that has gone is not a stream that dropped: reconnecting to it
+can never succeed, so the buffer stops retrying whichever this is.  This
+only says what happens to the buffer afterwards.
+
+`kill' removes it, as herdr removed the pane.  `keep' leaves the last
+frame readable and marks the mode line closed, which is what you want
+when a review or a command wrote something you still need to read."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-term
+  :type '(choice (const :tag "Kill the buffer" kill)
+                 (const :tag "Keep it, marked closed" keep)))
+
 (defcustom herdr-term-scroll-lines 3
   "How many lines one wheel notch scrolls the pane.
 This matches herdr's own mouse scroll default, so a pane moves by the
@@ -156,6 +170,9 @@ which makes it the record of whether that connection ever synced.")
 
 (defvar-local herdr-term--close-reason nil
   "Reason reported by the last `terminal.closed' of the current stream.")
+
+(defvar-local herdr-term--pane-gone nil
+  "Non-nil once herdr reported this buffer's pane as no longer existing.")
 
 (defvar-local herdr-term--input-bridge nil
   "Process forwarding ghostel's PTY writes to the control stream.")
@@ -260,8 +277,9 @@ directory when the current buffer is remote."
 
 (defun herdr-term-resync ()
   "Force a full-frame resync of the current buffer.
-This also clears a previous give-up, so a stream that was abandoned
-after `herdr-term-max-connect-attempts' can be retried."
+This also clears a previous give-up, and a pane reported gone, so a
+stream abandoned after `herdr-term-max-connect-attempts' — or one whose
+pane herdr has since made again under the same id — can be retried."
   (interactive)
   (setq herdr-term--last-reconnect nil
         herdr-term--fail-count 0)
@@ -405,6 +423,7 @@ frame, so this doubles as the only resync the protocol offers."
     (setq herdr-term--last-seq nil
           herdr-term--stdout ""
           herdr-term--close-reason nil
+          herdr-term--pane-gone nil
           herdr-term--last-reconnect (float-time))
     (let* ((subcommand (if herdr-term--writable "control" "observe"))
            (arguments
@@ -452,29 +471,75 @@ against the one the caller is about to make."
 (defun herdr-term--sentinel (process event)
   "Recover the stream of PROCESS after EVENT reported that it dropped.
 An intentional teardown detaches this sentinel first, so reaching here
-always means herdr closed the stream on us.  A stream that had already
-synced is reconnected as a transient drop.  One that exits without ever
-syncing is retried `herdr-term-max-connect-attempts' times and then
-abandoned, because an invalid or vanished pane never becomes valid."
+always means herdr closed the stream on us.  A pane herdr no longer has
+is an ending rather than a drop and is not retried at all.  A stream
+that had already synced is reconnected as a transient drop.  One that
+exits without ever syncing is retried
+`herdr-term-max-connect-attempts' times and then abandoned, because an
+invalid pane never becomes valid."
   (let ((buffer (process-get process 'herdr-term-buffer)))
     (when (and (buffer-live-p buffer)
                (memq (process-status process) '(exit signal)))
       (with-current-buffer buffer
         (let ((detail (or herdr-term--close-reason (string-trim event))))
-          (if herdr-term--last-seq
-              (herdr-term--reconnect (format "stream exited: %s" detail))
-            (setq herdr-term--fail-count (1+ herdr-term--fail-count))
-            (if (herdr-term--gave-up-p)
-                (progn
-                  (herdr-term--update-mode-line)
-                  (message
-                   "herdr-term[%s]: gave up after %d tries (%s); %s retries"
-                   herdr-term--pane herdr-term--fail-count detail
-                   (substitute-command-keys "\\[herdr-term-resync]")))
-              (herdr-term--reconnect
-               (format "connect failed: %s (attempt %d/%d)" detail
-                       herdr-term--fail-count
-                       herdr-term-max-connect-attempts)))))))))
+          (cond
+            ((herdr-term--pane-gone-p detail)
+             (herdr-term--end-for-good detail))
+            (herdr-term--last-seq
+             (herdr-term--reconnect (format "stream exited: %s" detail)))
+            (t
+             (setq herdr-term--fail-count (1+ herdr-term--fail-count))
+             (if (herdr-term--gave-up-p)
+                 (progn
+                   (herdr-term--update-mode-line)
+                   (message
+                    "herdr-term[%s]: gave up after %d tries (%s); %s retries"
+                    herdr-term--pane herdr-term--fail-count detail
+                    (substitute-command-keys "\\[herdr-term-resync]")))
+               (herdr-term--reconnect
+                (format "connect failed: %s (attempt %d/%d)" detail
+                        herdr-term--fail-count
+                        herdr-term-max-connect-attempts))))))))))
+
+(defconst herdr-term--pane-gone-regexp (rx "not found" eos)
+  "Match a close reason that means the pane itself is gone.
+As of herdr 0.7.5 three reasons end this way: a fresh connect that
+cannot resolve the pane says \"terminal session ACTION failed: terminal
+target PANE not found\", and an attach that never lands or is taken
+away says \"terminal attach failed\" or \"terminal attach ended:
+terminal ID not found\".  Every other reason herdr sends ends
+elsewhere, several of them in a \"; retry\" this must not match.
+
+Matched as text because nothing structured carries it — the reason
+arrives as prose, and the alternative is a second question to the
+server from inside a process sentinel, where a synchronous request
+hangs Emacs.  Nothing in `Package-Requires' pins a herdr version, so
+this docstring is the only record of the wording relied on: a reason
+that gains a suffix stops matching here, and the retry loop this
+prevents comes back.")
+
+(defun herdr-term--pane-gone-p (detail)
+  "Return non-nil when DETAIL is herdr reporting the pane as gone.
+DETAIL is checked for being a string because it can come straight from
+the wire, where the reason is whatever JSON herdr sent."
+  (and (stringp detail)
+       (string-match-p herdr-term--pane-gone-regexp detail)))
+
+(defun herdr-term--end-for-good (detail)
+  "End this buffer's stream for good, DETAIL being why its pane went.
+Retrying is pointless, so the stream, its bridge and every pending
+timer go rather than being rescheduled.  What becomes of the buffer is
+`herdr-term-pane-gone-action'.
+
+A kill is deferred rather than run here, because `kill-buffer' runs
+`kill-buffer-query-functions' and arbitrary hooks, and a process
+sentinel — holding this buffer current — is no place for either."
+  (herdr-term--teardown)
+  (setq herdr-term--pane-gone t)
+  (herdr-term--update-mode-line)
+  (message "herdr-term[%s]: pane closed (%s)" herdr-term--pane detail)
+  (when (eq herdr-term-pane-gone-action 'kill)
+    (run-at-time 0 nil #'kill-buffer (current-buffer))))
 
 (defun herdr-term--gave-up-p ()
   "Return non-nil when this buffer stopped retrying its stream."
@@ -713,15 +778,20 @@ and only one client at a time holds control of a pane."
 ;; herdr to change size instead, and the frames that come back bring the
 ;; new dimensions with them.
 
-(defun herdr-term--note-resize (frame)
-  "Fit every herdr pane shown on FRAME to the window showing it.
-Resolved from each window rather than from the current buffer, because
+(defun herdr-term--note-resize (window)
+  "Fit the herdr pane displayed by WINDOW to WINDOW.
+`window-size-change-functions' hands a buffer-local entry the window
+that changed, where a global one is handed the frame, and this is
+registered buffer-locally.  Read as a frame, the window reached
+`window-list' as its FRAME argument and signalled \"Window is on a
+different frame\" — every resize errored and nothing was ever fitted.
+
+Resolved from WINDOW rather than from the current buffer, because
 redisplay runs this with an arbitrary buffer current."
-  (dolist (window (window-list frame))
-    (let ((buffer (window-buffer window)))
-      (when (buffer-local-value 'herdr-term--pane buffer)
-        (with-current-buffer buffer
-          (herdr-term--schedule-resize window))))))
+  (let ((buffer (window-buffer window)))
+    (when (buffer-local-value 'herdr-term--pane buffer)
+      (with-current-buffer buffer
+        (herdr-term--schedule-resize window)))))
 
 (defun herdr-term-fit-to-window ()
   "Schedule a resize when this buffer's window and its grid disagree."
@@ -827,6 +897,7 @@ which resets `ghostel--process' to nil."
                 herdr-term--pane
                 (if herdr-term--writable "rw" "ro")
                 (cond
+                  (herdr-term--pane-gone " closed")
                   ((herdr-term--gave-up-p) " dead")
                   (herdr-term--last-seq
                    (format " %d" herdr-term--last-seq))

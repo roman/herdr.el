@@ -114,6 +114,23 @@ by 80."
                         :width (or cols 80)
                         :bytes (base64-encode-string payload t))))
 
+(defun herdr-term-test-end-stream (process event)
+  "Drive the sentinel for PROCESS as though it had exited with EVENT.
+The fixture's stand-in is a pipe process, and a deleted one of those
+reports `closed' where the real stream process, a subprocess, reports
+`exit' — which is the status the sentinel acts on.
+
+Only PROCESS is answered for.  `process-live-p' is Lisp and asks
+`process-status', so a stub that answered for every process would make
+each one look dead, and the teardown would walk past the input bridge
+it is supposed to kill."
+  (delete-process process)
+  (cl-letf* ((status (symbol-function 'process-status))
+             ((symbol-function 'process-status)
+              (lambda (other)
+                (if (eq other process) 'exit (funcall status other)))))
+    (herdr-term--sentinel process event)))
+
 (defun herdr-term-test-apply (line)
   "Apply the message on LINE to the current buffer, as the filter would."
   (herdr-term--apply-message
@@ -483,6 +500,122 @@ It deserves a message saying what to do, not an API error."
                                     :type 'user-error)))
       (should-not (eq (car error-data) 'herdr-api-error))
       (should (string-match-p "No live herdr panes" (cadr error-data))))))
+
+(ert-deftest herdr-term--sentinel:does-not-retry-a-pane-that-is-gone ()
+  "A pane herdr no longer has is an ending, not a dropped stream.
+Retried as a drop it failed three times over and left the buffer marked
+dead, offering a resync that could never work."
+  (let ((herdr-term-pane-gone-action 'keep))
+    (herdr-term-with-test-buffer
+      (setq herdr-term--last-seq 7
+            herdr-term--close-reason
+            "terminal attach ended: terminal term_abc not found")
+      (herdr-term-test-end-stream herdr-term--process "finished\n")
+      (should (zerop herdr-term-test-streams))
+      (should-not (timerp herdr-term--reconnect-timer))
+      (should herdr-term--pane-gone)
+      (should (string-match-p "closed" mode-line-process)))))
+
+(ert-deftest herdr-term--sentinel:kills-the-buffer-of-a-gone-pane ()
+  "By default the buffer goes where the pane went.
+The kill is deferred out of the sentinel rather than run inside it, so
+what the test can see is the deferral."
+  (let ((herdr-term-pane-gone-action 'kill)
+        (deferred nil))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_secs _repeat function &rest args)
+                 (setq deferred (cons function args)))))
+      (herdr-term-with-test-buffer
+        (setq herdr-term--last-seq 7
+              herdr-term--close-reason
+              "terminal session control failed: terminal target w1:p1 not found")
+        (herdr-term-test-end-stream herdr-term--process "finished\n")
+        (should (equal deferred (list #'kill-buffer (current-buffer))))))))
+
+(ert-deftest herdr-term--sentinel:keeps-the-buffer-when-told-to ()
+  "Nothing is killed under `keep', however the pane ended.
+The stream's input bridge still goes: kept alive it would hold a `cat'
+and `ghostel--process' for the life of the buffer, with no stream left
+for anything typed into it to reach."
+  (let ((herdr-term-pane-gone-action 'keep)
+        (deferred nil)
+        (bridge (make-pipe-process :name "herdr-term-test-bridge"
+                                   :noquery t
+                                   :filter #'ignore)))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (_secs _repeat function &rest args)
+                 (setq deferred (cons function args)))))
+      (herdr-term-with-test-buffer
+        (setq herdr-term--last-seq 7
+              herdr-term--input-bridge bridge
+              herdr-term--close-reason
+              "terminal session control failed: terminal target w1:p1 not found")
+        (herdr-term-test-end-stream herdr-term--process "finished\n")
+        (should-not deferred)
+        (should herdr-term--pane-gone)
+        (should-not (process-live-p bridge))
+        (should-not herdr-term--input-bridge)))))
+
+(ert-deftest herdr-term--pane-gone-p:knows-what-herdr-actually-sends ()
+  "Every reason herdr 0.7.5 gives for a pane that is not there.
+The match is on the server's own wording, so a reason that gains a
+suffix stops matching and the retry loop comes back.  These are the
+literal strings, quoted from herdr's headless server, and a change to
+any of them should fail here rather than in a pane weeks later."
+  (dolist (reason '("terminal session control failed: terminal target w1:p1 not found"
+                    "terminal attach failed: terminal term_abc not found"
+                    "terminal attach ended: terminal term_abc not found"))
+    (should (herdr-term--pane-gone-p reason)))
+  ;; The near misses, which are all retryable.
+  (dolist (reason '("terminal attach failed: terminal term_abc has a read in progress; retry"
+                    "terminal attach taken over"
+                    "server is shutting down"
+                    "detached"))
+    (should-not (herdr-term--pane-gone-p reason)))
+  ;; The reason comes off the wire, so it need not be a string at all.
+  (should-not (herdr-term--pane-gone-p 42))
+  (should-not (herdr-term--pane-gone-p nil)))
+
+(ert-deftest herdr-term--start-stream:clears-a-pane-reported-gone ()
+  "A pane can come back under the same id, and a resync is how.
+Left set, the flag outranks a live sequence number in the mode line and
+a fully resynced buffer still reads closed."
+  (let ((herdr-term-pane-gone-action 'keep)
+        ;; The fixture replaces `herdr-term--start-stream' with a counter,
+        ;; so the real one is held on to before entering it.
+        (start-stream (symbol-function 'herdr-term--start-stream)))
+    (herdr-term-with-test-buffer
+      (setq herdr-term--last-seq 7
+            herdr-term--close-reason
+            "terminal attach ended: terminal term_abc not found")
+      (herdr-term-test-end-stream herdr-term--process "finished\n")
+      (should herdr-term--pane-gone)
+      ;; Only the resets matter here, and they run before the connect
+      ;; this buffer has no server for.
+      (ignore-errors (funcall start-stream (current-buffer)))
+      (should-not herdr-term--pane-gone)
+      (should-not herdr-term--last-seq))))
+
+(ert-deftest herdr-term--sentinel:still-reconnects-an-ordinary-drop ()
+  "A stream that dropped for any other reason is still transient."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--last-seq 7
+          herdr-term--close-reason "server restarted")
+    (herdr-term-test-end-stream herdr-term--process "finished\n")
+    (should (= 1 herdr-term-test-streams))
+    (should-not herdr-term--pane-gone)))
+
+(ert-deftest herdr-term--note-resize:takes-the-window-a-local-hook-gets ()
+  "A local hook is handed the window that changed, not the frame.
+Read as a frame it reached `window-list' as one, which signals \"Window
+is on a different frame\", so every resize errored and no pane was ever
+fitted."
+  (herdr-term-with-test-buffer
+    (save-window-excursion
+      (set-window-buffer (selected-window) (current-buffer))
+      (herdr-term--note-resize (selected-window))
+      (should (timerp herdr-term--resize-timer))
+      (herdr-term--cancel-resize))))
 
 ;;; _
 (provide 'herdr-term-tests)
