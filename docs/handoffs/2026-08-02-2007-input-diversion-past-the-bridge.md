@@ -1,7 +1,7 @@
 ---
 topic: macOS typing lag root-caused to Emacs's Cocoa event loop, the input bridge round trip removed and measured, reviewed and pushed
 date: 2026-08-02
-status: Branch divert-input-past-the-bridge at 7897a1b, pushed, 134 tests green, two code-critic passes and a human review closed with no comments
+status: Landed on master at ab138c2, pushed, 154 tests green, two code-critic passes and a human review closed with no comments; zoo.nix lock bumped
 Recurring-friction: passing-test-without-teeth
 ---
 
@@ -147,25 +147,28 @@ length bound, so nothing needs to change.
 
 ## Current state
 
-One commit, `7897a1b`, on `divert-input-past-the-bridge`, pushed. It touches
-`herdr-term.el` and `test/herdr-term-tests.el` only. It replaces the two commits
-the branch previously carried, which the review skill's collapse squashed once
-the review closed; `refs/reviews/4` was moved onto it.
+One commit, `ab138c2`, touching `herdr-term.el` and `test/herdr-term-tests.el`
+only. It replaces the two commits the branch previously carried, which the
+review skill's collapse squashed once the review closed. Roman read the change
+in a herdr review and closed it with no comments, and it went onto master as a
+fast-forward — no merge commit, matching the rest of that history.
 
 `just check` passes: every file byte-compiles under `byte-compile-error-on-warn`
-with no warnings, all 134 ERT tests pass, and `check-declare` and `checkdoc` are
+with no warnings, all 154 ERT tests pass, and `check-declare` and `checkdoc` are
 silent. Both new tests were mutation-checked — removing the demotion fails
 `reports-a-failed-send`, and removing the retirement fails
 `retires-the-last-divert`.
 
-Roman read the change in a herdr review and closed it with no comments.
+`zoo.nix` now locks `herdr-el` at this work, and `nix build .#herdr-el` against
+the new pin succeeds.
 
 ## Next steps
 
-- Confirm the fix by feel in a real macOS pane. Every number here came from a
+- Rebuild on the Mac and confirm the fix by feel. Every number here came from a
   harness, and the machine that felt the lag is not the machine that measured
-  the fix.
-- Open the PR when the branch is ready to land.
+  the fix. The Linux daemon I checked still ran the old pinned build — three
+  live bridges and no advice installed — so nothing picks the change up until a
+  rebuild.
 
 ## Gaps
 
