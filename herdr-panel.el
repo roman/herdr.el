@@ -354,6 +354,26 @@ whether or not they happen to have opened it."
       ;; only the background comes from here.
       (herdr-panel--add-face start (point) 'herdr-panel-current 'beneath))))
 
+(defun herdr-panel-entry-line (spec)
+  "Return SPEC drawn as one line, for offering a row in the minibuffer.
+Drawn by `herdr-panel-insert-entry' and then folded onto one line,
+rather than drawn a second way, so that a row offered by name is the
+row the panel draws and stays that way.  What a panel puts on lines of
+its own comes up onto the end of the name here, because a candidate is
+one line and because those lines hold much of what a reader types to
+pick one: the directory, the title an agent gave itself.  A row has
+nothing to indent against in a prompt, so `:indent' is dropped."
+  (with-temp-buffer
+    (herdr-panel-insert-entry (append '(:indent "") spec))
+    (goto-char (point-min))
+    ;; Carrying the newline's own properties, which is what keeps the
+    ;; fill under a current row unbroken across the join.
+    (while (re-search-forward "\n *" nil t)
+      (replace-match (apply #'propertize "  "
+                            (text-properties-at (match-beginning 0)))
+                     t t))
+    (string-trim-right (buffer-string))))
+
 (defun herdr-panel-open-panes ()
   "Return the panes some Emacs buffer is mirroring, in no order."
   (sort (delq nil (mapcar #'herdr-panel--buffer-pane (buffer-list)))
@@ -539,10 +559,13 @@ With a prefix argument OTHER, open it the other way round from
   (unless herdr-panel-pane-function
     (user-error "Not in a herdr panel"))
   (herdr-panel-open-pane (funcall herdr-panel-pane-function)
-                         (herdr-panel--access other)))
+                         (herdr-panel-access other)))
 
-(defun herdr-panel--access (invert)
-  "Return how to open a terminal, INVERT swapping the usual answer."
+(defun herdr-panel-access (invert)
+  "Return how to open a terminal, INVERT swapping the usual answer.
+The usual answer is `herdr-panel-visit-access'.  Every way of reaching
+a row asks here, so naming one in the minibuffer lands exactly where
+pressing RET on it would have."
   (if invert
       (if (eq herdr-panel-visit-access 'control) 'observe 'control)
     herdr-panel-visit-access))
@@ -553,6 +576,81 @@ With a prefix argument OTHER, open it the other way round from
   (unless herdr-panel-refresh-function
     (user-error "Not in a herdr panel"))
   (funcall herdr-panel-refresh-function))
+
+;;; Reading a Row by Name
+
+;; A panel is a list you walk to.  The same list can be typed at, which
+;; is quicker once you know which row you want, and which is what a
+;; completion framework is on hand for.  Each panel builds its own rows,
+;; because only it knows what they are; everything about offering them
+;; lives here, so that the prompts behave alike whichever panel raised
+;; one.
+
+;; A row opens with its status mark, which is what a reader scans a
+;; column for and so has to survive into the prompt.  It also means the
+;; text a reader types is never a prefix of the candidate, and `basic',
+;; the style Emacs completes with out of the box, matches only prefixes:
+;; without this, typing a workspace's name would complete nothing at
+;; all.  `completion-category-defaults' is where a library says how its
+;; own category should be matched, and a user's
+;; `completion-category-overrides' still wins over it, so a setup with
+;; orderless or fuzzy matching goes on using that.
+(add-to-list 'completion-category-defaults
+             '(herdr-pane (styles basic substring)))
+
+(defun herdr-panel-ensure-session ()
+  "Make sure there is a session tree to read rows out of.
+A command that names a row rather than walking to one may be the first
+herdr command of the session.  It takes a snapshot rather than start
+the tracking a panel needs: nothing here is going to be redrawn, and a
+subscription and a poll timer begun with no panel on the frame would
+have nothing left to stop them again."
+  (unless (herdr-session-live-p)
+    (herdr-session-refresh)))
+
+(defun herdr-panel-read-pane (prompt rows)
+  "Read one of ROWS under PROMPT and return the pane it stands for.
+ROWS is a list of (LINE . PANE), each LINE built by
+`herdr-panel-entry-line'.  They are offered in the order given rather
+than sorted, because a panel has already put whatever wants attention
+at the top of it."
+  (let ((rows (herdr-panel--distinct rows)))
+    (or (cdr (assoc (completing-read prompt (herdr-panel--table rows) nil t)
+                    rows))
+        ;; `completing-read' lets the empty string out however much a
+        ;; match is required of everything else, so a prompt answered
+        ;; with nothing has to be refused here rather than carried on
+        ;; with as a pane that does not exist.
+        (user-error "No row of that name"))))
+
+(defun herdr-panel--table (rows)
+  "Return a completion table over ROWS that does not reorder them."
+  (lambda (string predicate action)
+    (if (eq action 'metadata)
+        '(metadata (category . herdr-pane)
+                   (display-sort-function . identity)
+                   (cycle-sort-function . identity))
+      (complete-with-action action rows string predicate))))
+
+(defun herdr-panel--distinct (rows)
+  "Return ROWS with no two lines alike.
+Two panes can draw one line between them: two agents of a kind, in one
+window, reporting the same title.  A table holding a line twice sends
+both to whichever pane came first, so every row of a repeated line is
+named by its pane, which is the one thing about it that cannot repeat.
+Every one of them, rather than all but the first: a line singled out
+among identical ones says the others are something else."
+  (let ((counts (make-hash-table :test #'equal)))
+    (dolist (row rows)
+      (puthash (car row) (1+ (gethash (car row) counts 0)) counts))
+    (mapcar (lambda (row)
+              (if (eql (gethash (car row) counts) 1)
+                  row
+                (cons (concat (car row) " "
+                              (herdr-panel-text (cdr row)
+                                                'herdr-panel-detail))
+                      (cdr row))))
+            rows)))
 
 ;;; Keys
 

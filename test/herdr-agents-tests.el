@@ -28,6 +28,7 @@
 (require 'ert)
 
 (require 'herdr-agents)
+(require 'herdr-panel-tests)
 (require 'herdr-session-tests)
 
 ;;; Fixtures
@@ -105,6 +106,28 @@ the label would stop hiding the moment that label changed."
                                "w1:p2" "reporter" "blocked")
                               (list :display_agent "notes"))))
       (should (null (herdr-agents--sorted))))))
+
+;;; Naming An Agent Instead Of Walking To It
+
+(ert-deftest herdr-agents--read:offers-what-the-panel-lists ()
+  "The prompt is the panel, so the loudest agent is the first candidate.
+A prompt that reordered them would bury exactly the agent the panel
+exists to raise."
+  (herdr-session-with-snapshot
+      (herdr-agents-tests--panes
+       (herdr-agents-tests--agent "w1:p1" "claude" "idle")
+       (herdr-agents-tests--agent "w1:p2" "claude" "working")
+       (herdr-agents-tests--agent "w1:p3" "claude" "blocked"))
+    (herdr-panel-tests-offline
+      (herdr-panel-tests-choosing 0
+        (should (equal (herdr-agents--read) "w1:p3"))
+        (should (eql (length herdr-panel-tests--offered) 3))))))
+
+(ert-deftest herdr-agents--read:refuses-when-there-is-nothing-to-name ()
+  "A session with no agent says so rather than raising an empty prompt."
+  (herdr-session-with-snapshot (herdr-agents-tests--panes)
+    (herdr-panel-tests-offline
+      (should-error (herdr-agents--read) :type 'user-error))))
 
 ;;; _
 (provide 'herdr-agents-tests)

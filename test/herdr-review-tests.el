@@ -34,6 +34,7 @@
 
 (require 'herdr-review)
 (require 'herdr-ui)
+(require 'herdr-panel-tests)
 (require 'herdr-session-tests)
 
 ;;; Fixtures
@@ -119,6 +120,28 @@ panel draws its rows."
       (should (null (herdr-review--workspace-at-point))))
     (with-temp-buffer
       (should (null (herdr-review--workspace-at-point))))))
+
+;;; Naming A Review Instead Of Walking To It
+
+(ert-deftest herdr-review--read:offers-reviews-and-nothing-else ()
+  "A coding agent is not a review, at the prompt as in the panel.
+The waiting one comes first, and a review is what the pane answers
+with."
+  (herdr-session-with-snapshot
+      (list :agents
+            (vector (herdr-review-tests--agent "w1:p1" "claude" "blocked")
+                    (herdr-review-tests--agent "w1:p2" "review" "idle" "w1")
+                    (herdr-review-tests--agent "w2:p1" "review" "blocked" "w2")))
+    (herdr-panel-tests-offline
+      (herdr-panel-tests-choosing 0
+        (should (equal (herdr-review--read) "w2:p1"))
+        (should (eql (length herdr-panel-tests--offered) 2))))))
+
+(ert-deftest herdr-review--read:refuses-when-nothing-is-waiting ()
+  "No review is an ordinary state, and says so rather than prompting."
+  (herdr-session-with-snapshot (list :agents (vector))
+    (herdr-panel-tests-offline
+      (should-error (herdr-review--read) :type 'user-error))))
 
 ;;; Reaching The Script
 

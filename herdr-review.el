@@ -155,6 +155,34 @@ form `herdr-ui-panels' names to put the panel in a column."
       (herdr-review-refresh))
     buffer))
 
+;;;###autoload
+(defun herdr-review-visit (pane &optional other)
+  "Show the terminal for the review running in PANE.
+PANE is read with completion over the reviews herdr is reporting, the
+ones waiting on you first, exactly as the panel lists them.  With a
+prefix argument OTHER, open it the other way round from
+`herdr-panel-visit-access', as pressing RET on the row would.
+
+This goes to a review that is already open.  `herdr-review-open' is
+what starts one."
+  (interactive (list (herdr-review--read) current-prefix-arg))
+  (herdr-panel-open-pane pane (herdr-panel-access other)))
+
+(defun herdr-review--read ()
+  "Read a review with completion and return the pane holding it."
+  (herdr-panel-ensure-session)
+  (let ((reviews (herdr-review-list))
+        (current (herdr-panel-current-pane)))
+    (unless reviews
+      (user-error "Nothing is waiting to be reviewed"))
+    (herdr-panel-read-pane
+     "Review: "
+     (mapcar (lambda (review)
+               (cons (herdr-panel-entry-line
+                      (herdr-review--entry review current))
+                     (gethash "pane_id" review)))
+             reviews))))
+
 (defun herdr-review-refresh ()
   "Redraw the reviews panel from the session tree."
   (interactive)
@@ -235,19 +263,21 @@ is this file's business."
 
 ;;; Rendering
 
-(defun herdr-review--insert (review current)
-  "Insert an entry for REVIEW, emphasised against the CURRENT pane.
+(defun herdr-review--entry (review current)
+  "Return the row for REVIEW, emphasised against the CURRENT pane.
 The workspace names the row, because one review per workspace makes
 the workspace the thing being reviewed.  What is under review goes
 beneath it, as the script counted it when the review opened."
-  (let ((pane (gethash "pane_id" review)))
-    (magit-insert-section (herdr-review-entry pane)
-      (herdr-panel-insert-entry
-       (list :status (gethash "agent_status" review)
-             :emphasis (herdr-panel-emphasis pane current)
-             :label (herdr-review--label review)
-             :aside (herdr-panel-text herdr-review-icon 'herdr-review-icon)
-             :detail (herdr-review--summary review))))))
+  (list :status (gethash "agent_status" review)
+        :emphasis (herdr-panel-emphasis (gethash "pane_id" review) current)
+        :label (herdr-review--label review)
+        :aside (herdr-panel-text herdr-review-icon 'herdr-review-icon)
+        :detail (herdr-review--summary review)))
+
+(defun herdr-review--insert (review current)
+  "Insert an entry for REVIEW, emphasised against the CURRENT pane."
+  (magit-insert-section (herdr-review-entry (gethash "pane_id" review))
+    (herdr-panel-insert-entry (herdr-review--entry review current))))
 
 (defun herdr-review--label (review)
   "Return the name of the workspace REVIEW is reviewing."

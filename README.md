@@ -105,6 +105,41 @@ column of panels down the left with a terminal filling the rest. From there:
 Each panel also opens on its own — `M-x herdr-spaces`, `M-x herdr-agents`,
 `M-x herdr-review` — if you would rather arrange the windows yourself.
 
+### Naming a row instead of walking to it
+
+Walking a panel is the right way to browse. Once you know where you are
+going, typing the name is quicker, and three commands read one:
+
+| Command              | Reads                                            |
+|----------------------|--------------------------------------------------|
+| `herdr-spaces-visit` | every workspace, in the panel's grouped order    |
+| `herdr-agents-visit` | every agent, the ones wanting attention first    |
+| `herdr-review-visit` | every open review, the ones waiting on you first |
+
+Each prompts with the same line the panel draws — status mark, name, and
+the notes underneath brought up onto the end of it — so the directory
+under a workspace and the title an agent gave itself are both there to be
+typed at and to be read back. Candidates keep the panel's order, which is
+the order that puts a blocked agent at the top.
+
+Because a row opens with its status mark, nothing you type is ever a
+prefix of a candidate, and `basic` — what Emacs completes with until told
+otherwise — matches only prefixes. herdr therefore registers its
+candidates under the `herdr-pane` completion category and gives that
+category `substring` as well. Your own `completion-category-overrides`
+still wins, so orderless or fuzzy matching goes on doing what you set it
+up to do.
+
+They land exactly where `RET` on the row would, `herdr-panel-visit-access`
+and its prefix argument included, and they work with no panel on the frame:
+the session starts itself if nothing has started it yet.
+
+```elisp
+(keymap-global-set "C-c h s" #'herdr-spaces-visit)
+(keymap-global-set "C-c h a" #'herdr-agents-visit)
+(keymap-global-set "C-c h r" #'herdr-review-visit)
+```
+
 ## Example + explanations
 
 ```elisp

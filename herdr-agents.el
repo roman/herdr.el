@@ -144,6 +144,31 @@ form `herdr-ui-panels' names to put the panel in a column."
       (herdr-agents-refresh))
     buffer))
 
+;;;###autoload
+(defun herdr-agents-visit (pane &optional other)
+  "Show the terminal for the agent called PANE.
+PANE is read with completion over the agents herdr has detected, the
+ones wanting attention first, exactly as the panel lists them.  With a
+prefix argument OTHER, open it the other way round from
+`herdr-panel-visit-access', as pressing RET on the row would."
+  (interactive (list (herdr-agents--read) current-prefix-arg))
+  (herdr-panel-open-pane pane (herdr-panel-access other)))
+
+(defun herdr-agents--read ()
+  "Read an agent with completion and return its pane."
+  (herdr-panel-ensure-session)
+  (let ((agents (herdr-agents--sorted))
+        (current (herdr-panel-current-pane)))
+    (unless agents
+      (user-error "Herdr has detected no agents"))
+    (herdr-panel-read-pane
+     "Agent: "
+     (mapcar (lambda (agent)
+               (cons (herdr-panel-entry-line
+                      (herdr-agents--entry agent current))
+                     (gethash "pane_id" agent)))
+             agents))))
+
 (defun herdr-agents-refresh ()
   "Redraw the agents panel from the session tree."
   (interactive)
@@ -177,20 +202,21 @@ are left out."
                                      herdr-agents-hidden-kinds))
                            (herdr-session-agents))))
 
+(defun herdr-agents--entry (agent current)
+  "Return the row for AGENT, emphasised against the CURRENT pane.
+Which workspace and window an agent sits in is what tells two agents
+of the same kind apart, so that names the row and the kind follows it
+rather than the other way round."
+  (list :status (gethash "agent_status" agent)
+        :emphasis (herdr-panel-emphasis (gethash "pane_id" agent) current)
+        :label (herdr-agents--where agent)
+        :aside (herdr-agents--kind agent)
+        :detail (gethash "terminal_title_stripped" agent)))
+
 (defun herdr-agents--insert (agent current)
-  "Insert an entry for AGENT, emphasised against the CURRENT pane.
-Two lines, as herdr draws them: where the agent is on the first, and
-what it is and what it is doing on the second.  Which workspace and
-window an agent sits in is what tells two agents of the same kind
-apart, so that goes above the kind rather than below it."
-  (let ((pane (gethash "pane_id" agent)))
-    (magit-insert-section (herdr-agent pane)
-      (herdr-panel-insert-entry
-       (list :status (gethash "agent_status" agent)
-             :emphasis (herdr-panel-emphasis pane current)
-             :label (herdr-agents--where agent)
-             :aside (herdr-agents--kind agent)
-             :detail (gethash "terminal_title_stripped" agent))))))
+  "Insert an entry for AGENT, emphasised against the CURRENT pane."
+  (magit-insert-section (herdr-agent (gethash "pane_id" agent))
+    (herdr-panel-insert-entry (herdr-agents--entry agent current))))
 
 (defun herdr-agents--where (agent)
   "Return where AGENT is: its workspace, and its window within it.
