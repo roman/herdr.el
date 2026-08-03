@@ -26,6 +26,9 @@ This extension will require:
 The Reviews panel additionally wants the `herdr-review` script, which ships in the
 [herdr-review](https://github.com/roman/herdr-review) project rather than here. Everything else works without it.
 
+Sounds want nothing, until you name a file for one — then they want a player to hand it to.
+The bell needs neither.
+
 ## Installation
 
 There is no `herdr.el` file to load. The package is a set of libraries, and the one you want
@@ -79,6 +82,7 @@ and ghostel yourself:
 (add-to-list 'load-path "~/src/herdr.el")
 (require 'herdr-ui)
 (require 'herdr-review) ; optional; see below
+(require 'herdr-sound)  ; optional; see below
 ```
 
 ## Getting Started
@@ -106,19 +110,24 @@ Each panel also opens on its own — `M-x herdr-spaces`, `M-x herdr-agents`,
 ```elisp
 (require 'herdr-ui)
 (require 'herdr-review)                        ;; (1)
+(require 'herdr-sound)                         ;; (2)
+(herdr-sound-mode)
 
-(setq herdr-ui-panels                          ;; (2)
+(setq herdr-sound-request-file "~/sounds/attention.mp3")
+(setq herdr-sound-agents '(("droid" . off)))
+
+(setq herdr-ui-panels                          ;; (3)
       '((herdr-spaces-panel . 3)
         (herdr-agents-panel . 2)
         (herdr-review-panel . 1)))
 
 (setq herdr-ui-side-width 36)
-(setq herdr-panel-visit-access 'observe)       ;; (3)
-(setq herdr-agents-icons                      ;; (4)
+(setq herdr-panel-visit-access 'observe)       ;; (4)
+(setq herdr-agents-icons                      ;; (5)
       '(("claude" . "✳")
         ("codex" . "◆")))
-(setq herdr-api-socket "~/.config/herdr/sessions/work/herdr.sock") ;; (5)
-(setq herdr-spaces-git nil)                    ;; (6)
+(setq herdr-api-socket "~/.config/herdr/sessions/work/herdr.sock") ;; (6)
+(setq herdr-spaces-git nil)                    ;; (7)
 
 (keymap-global-set "C-c h" #'herdr-ui)
 ```
@@ -139,7 +148,31 @@ In the panel, `+` starts a review of the workspace at point and `-` ends it.
 A workspace holds one review at a time; asking for a second goes to the
 first. Point that at your own tool by setting `herdr-review-program`.
 
-### (2) The column is a list of panels
+### (2) Sounds are opt in, and follow herdr's decisions
+
+`herdr-sound-mode` rings when an agent starts waiting for you, and rings
+again when one finishes work you were not watching. herdr splits this the
+same way: its server decides that a state changed and forwards a
+notification, and each connected client makes the noise. The server plays
+nothing itself, so an Emacs that never attaches a herdr terminal hears
+nothing until this is on.
+
+Whether a finish is worth announcing is herdr's call, not ours. On the wire
+`done` and `idle` are one state told apart by whether herdr holds you to
+have watched the work end — `done` is the finish it wants announced, `idle`
+the one it has already discounted. A finish is dropped again here when the
+pane is on screen in Emacs, which is the one question herdr cannot answer
+for you.
+
+The default is the bell, because herdr's own two sounds are mp3 files
+compiled into its binary with no copy on disk, and Emacs plays only wav and
+au. Name a file in `herdr-sound-request-file` or `herdr-sound-done-file` and
+it goes to the first installed player in `herdr-sound-players` — herdr's own
+list, which leaves out bare `aplay` because it does not decode mp3 and would
+play the bytes as raw noise. `herdr-sound-agents` silences one kind of agent,
+as herdr's per-agent table does, and ships `droid` off for the same reason.
+
+### (3) The column is a list of panels
 
 `herdr-ui-panels` is an alist of `(FUNCTION . WEIGHT)`, top to bottom. The
 weights are shares counted against each other rather than fractions, so
@@ -151,7 +184,7 @@ An entry whose function is undefined is skipped rather than signalled, which
 is how the optional Reviews panel keeps its place in the order without
 costing anything when it is not loaded.
 
-### (3) Who holds the keyboard
+### (4) Who holds the keyboard
 
 herdr grants control of a pane to one client at a time, so a terminal opened
 from a panel takes the keyboard away from wherever it was — including from
@@ -164,7 +197,7 @@ the herdr TUI. `herdr-panel-visit-access` chooses which you get by default:
 
 A prefix argument to `herdr-panel-visit` asks for the other one.
 
-### (4) Marking the Agents panel
+### (5) Marking the Agents panel
 
 The Agents panel lists every agent herdr has detected, loudest first: it
 answers "who wants me", so the order is by attention rather than by position
@@ -180,7 +213,7 @@ there if your font has the real logo.
 kind with a panel of its own is not listed twice — `herdr-review` adds itself
 to it — rather than as a general filter.
 
-### (5) Which server
+### (6) Which server
 
 By default the socket is discovered: `HERDR_SOCKET_PATH` first, which herdr
 exports into every pane it owns — so an Emacs started from inside herdr
@@ -192,7 +225,7 @@ Only the frame stream uses herdr's command line. Everything structural goes
 over the JSON API socket, which herdr documents for third-party tools.
 herdr.el never speaks the private binary client protocol.
 
-### (6) Git state costs a subprocess
+### (7) Git state costs a subprocess
 
 herdr computes the branch and dirty state it draws on a space but puts
 neither on the wire, so herdr.el asks git itself, cached for
