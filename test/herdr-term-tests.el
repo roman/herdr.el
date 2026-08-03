@@ -554,6 +554,32 @@ A second setup reuses the live bridge rather than forking another."
       (herdr-term-test-restore-advice advised)
       (kill-buffer buffer))))
 
+(ert-deftest herdr-term--ensure-input-bridge:tags-a-bridge-it-inherited ()
+  "A bridge made before the divert existed is tagged all the same.
+Reloading the library over a running session leaves exactly that: a live
+bridge no advice ever saw, whose input would take the slow path forever."
+  (let ((buffer (generate-new-buffer " *herdr-term-inherit-test*"))
+        (advised (advice-member-p #'herdr-term--divert-input
+                                  'process-send-string)))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq herdr-term--pane "w1:p1"
+                herdr-term--input-bridge
+                (make-process :name "herdr-term-inherited-test"
+                              :buffer nil
+                              :command '("cat")
+                              :connection-type 'pipe
+                              :noquery t
+                              :filter #'ignore))
+          (should-not (herdr-term--input-target herdr-term--input-bridge))
+          (herdr-term--ensure-input-bridge)
+          (should (eq (herdr-term--input-target herdr-term--input-bridge)
+                      buffer)))
+      (with-current-buffer buffer
+        (herdr-term--kill-input-bridge))
+      (herdr-term-test-restore-advice advised)
+      (kill-buffer buffer))))
+
 (ert-deftest herdr-term--kill-input-bridge:retires-the-last-divert ()
   "The divert outlives one bridge and dies with the last of them.
 Left installed, it would filter every `process-send-string' an Emacs

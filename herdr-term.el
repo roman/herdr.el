@@ -891,6 +891,12 @@ the bridge.  The bridge is what makes the paths uniform; the advice is
 what makes them prompt.  The advice outlives any one buffer and is
 retired by `herdr-term--kill-input-bridge' with the last bridge.
 
+The tag and the advice go on together on every call, rather than only
+when this makes the bridge.  A bridge that predates the advice cannot
+tag itself, and reloading the library over a running session leaves one
+of exactly that kind: input still works, by the slow path, and nothing
+says why.
+
 This is idempotent, and must run after every `ghostel--init-buffer',
 which resets `ghostel--process' to nil."
   (unless (process-live-p herdr-term--input-bridge)
@@ -906,8 +912,9 @@ which resets `ghostel--process' to nil."
              :filter (lambda (_process bytes)
                        (when (buffer-live-p buffer)
                          (with-current-buffer buffer
-                           (herdr-term--send-input bytes))))))
-      (process-put herdr-term--input-bridge 'herdr-term-input-buffer buffer)))
+                           (herdr-term--send-input bytes))))))))
+  (process-put herdr-term--input-bridge 'herdr-term-input-buffer
+               (current-buffer))
   (advice-add 'process-send-string :around #'herdr-term--divert-input)
   (setq ghostel--process herdr-term--input-bridge))
 
