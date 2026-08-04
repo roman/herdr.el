@@ -27,10 +27,11 @@
 ;;; Commentary:
 
 ;; Transport for the herdr server's public JSON API, the socket herdr
-;; documents for third-party tools.  This file carries requests and events
-;; and nothing else: it knows no method names and builds no user interface,
-;; so what herdr adds next needs no change here.  Live terminal output does
-;; not travel this socket at all; see `herdr-term' for that.
+;; documents for third-party tools.  This file carries requests and
+;; events, and counts them: it knows no method names, so what herdr adds
+;; next needs no change here.  The one buffer it builds is the traffic
+;; report, which names no method either.  Live terminal output does not
+;; travel this socket at all; see `herdr-term' for that.
 
 ;; The protocol is one line of JSON in each direction:
 ;;
@@ -55,6 +56,11 @@
 ;;   names, and the events it pushes are named with underscores where the
 ;;   subscription used dots: subscribing to "pane.updated" delivers events
 ;;   whose `event' is "pane_updated".
+
+;; Because a connection is spent per request and callers decide how many
+;; to make, every request and every event is counted as it passes.
+;; `herdr-api-report-traffic' shows the counts and `herdr-api-traffic'
+;; returns them as data; see the Traffic section below.
 
 ;;; Code:
 
@@ -102,6 +108,210 @@ at \"herdr/herdr.sock\" under the XDG configuration directory."
 
 (defvar herdr-api--request-counter 0
   "Count of requests made, which makes each request identifier unique.")
+
+;;; Traffic
+
+;; Every request and every event is counted, so that a session which
+;; feels slow can be measured rather than guessed at.  Nothing here
+;; decides how many requests there are: a caller that refreshes on each
+;; event makes one request per event, and a pane running an agent
+;; produces several events a second.  The two counts read together say
+;; whether the server is talkative or the caller wasteful.
+
+;; Counting is unconditional.  It costs one hash-table write per
+;; request, and a counter that must be switched on first is never on
+;; when the slowness happens.
+
+;; The counts only ever rise, which is the shape a metrics exporter
+;; needs; see `herdr-api-traffic'.  `herdr-api-reset-traffic' moves the
+;; window the report covers instead of clearing them.
+
+;; Waiting is counted per method and again in total.  A method keeps the
+;; whole span of its own calls.  The total keeps only the spans that no
+;; other request was already inside, because waiting for a reply runs
+;; timers and process filters: a refresh timer firing inside an outer
+;; wait would otherwise be counted twice, and the total would exceed the
+;; window it is printed against.
+
+(defconst herdr-api--traffic-columns "%-24s %8s %9s %10s %10s\n"
+  "Format of one row of the traffic report, taking five strings.")
+
+(defvar herdr-api--traffic (make-hash-table :test #'equal)
+  "Requests made, keyed by method name.
+Each value has the form (COUNT SECONDS), SECONDS being how long those
+calls waited for their replies.  Neither figure is ever reduced.")
+
+(defvar herdr-api--traffic-slowest (make-hash-table :test #'equal)
+  "The longest single wait of each method, keyed by method name.
+Cleared by `herdr-api-reset-traffic', because the longest wait of a
+window cannot be worked out from two cumulative counts.")
+
+(defvar herdr-api--traffic-blocked 0
+  "Seconds waited with no other request already waiting.
+Never reduced.  This is what the report totals, rather than the sum of
+the per-method times; see the commentary above.")
+
+(defvar herdr-api--traffic-events 0
+  "Events delivered to subscribers.  Never reduced.")
+
+(defvar herdr-api--traffic-depth 0
+  "How many requests are waiting for a reply at this moment.")
+
+(defvar herdr-api--traffic-since (float-time)
+  "When the window `herdr-api-report-traffic' covers began.")
+
+(defvar herdr-api--traffic-baseline nil
+  "The counts as they stood when that window began, or nil.
+Takes the form `herdr-api-traffic' returns.  The report subtracts it,
+which is what lets the counts themselves go on rising.")
+
+(defun herdr-api--note-request (method start)
+  "Count one call of METHOD that began waiting at START."
+  (let* ((seconds (- (float-time) start))
+         (entry (gethash method herdr-api--traffic))
+         (slowest (gethash method herdr-api--traffic-slowest)))
+    (puthash method
+             (list (1+ (or (nth 0 entry) 0))
+                   (+ (or (nth 1 entry) 0) seconds))
+             herdr-api--traffic)
+    (puthash method (max (or slowest 0) seconds)
+             herdr-api--traffic-slowest)
+    (when (= herdr-api--traffic-depth 1)
+      (setq herdr-api--traffic-blocked
+            (+ herdr-api--traffic-blocked seconds)))))
+
+(defun herdr-api--note-event ()
+  "Count one event delivered to a subscriber."
+  (setq herdr-api--traffic-events (1+ herdr-api--traffic-events)))
+
+(defun herdr-api-traffic ()
+  "Return what has crossed this socket so far, as a plist.
+
+  (:requests ((METHOD . (:count COUNT :seconds SECONDS
+                         :slowest SECONDS)) ...)
+   :blocked-seconds SECONDS
+   :events COUNT)
+
+Every count and every total is cumulative: it rises for as long as
+Emacs runs and is never reduced.  Sample it twice and subtract to get
+a rate.  That is what a Prometheus counter is, so exporting these
+needs no more than a scrape endpoint, and nothing here has to know
+what Prometheus is.  Times are in seconds, the unit such an exporter
+expects.
+
+`:slowest' is the one exception and behaves as a gauge: it holds the
+longest single wait since `herdr-api-reset-traffic' last ran, because
+a maximum cannot be recovered by subtracting two totals."
+  (let ((requests nil))
+    (maphash
+     (lambda (method entry)
+       (push (cons method
+                   (list :count (nth 0 entry)
+                         :seconds (nth 1 entry)
+                         :slowest (or (gethash method
+                                               herdr-api--traffic-slowest)
+                                      0)))
+             requests))
+     herdr-api--traffic)
+    (list :requests requests
+          :blocked-seconds herdr-api--traffic-blocked
+          :events herdr-api--traffic-events)))
+
+(defun herdr-api--traffic-delta (key now was)
+  "Return the KEY of plist NOW less the KEY of plist WAS."
+  (- (or (plist-get now key) 0) (or (plist-get was key) 0)))
+
+(defun herdr-api--traffic-rows ()
+  "Return (METHOD COUNT SECONDS SLOWEST) per method, busiest first.
+These cover the current report window rather than the whole run, and a
+method untouched since the window opened is left out."
+  (let ((baseline (plist-get herdr-api--traffic-baseline :requests))
+        (rows nil))
+    (dolist (request (plist-get (herdr-api-traffic) :requests))
+      (let* ((now (cdr request))
+             (was (cdr (assoc (car request) baseline)))
+             (count (herdr-api--traffic-delta :count now was)))
+        (unless (zerop count)
+          (push (list (car request) count
+                      (herdr-api--traffic-delta :seconds now was)
+                      (plist-get now :slowest))
+                rows))))
+    (sort rows (lambda (a b) (> (nth 1 a) (nth 1 b))))))
+
+(defun herdr-api--traffic-row (label count seconds slowest elapsed)
+  "Return the report row named LABEL, covering COUNT of something.
+SECONDS is how long they waited in total, SLOWEST the longest single
+wait among them, and ELAPSED the width of the window they were counted
+over.  SECONDS and SLOWEST may be nil, for a row counting something
+that never waits."
+  (format herdr-api--traffic-columns label
+          (number-to-string count)
+          (format "%.2f" (/ count elapsed))
+          (if seconds (format "%.2fs" seconds) "")
+          (if slowest (format "%.2fs" slowest) "")))
+
+;;;###autoload
+(defun herdr-api-report-traffic ()
+  "Show what this Emacs has asked of the herdr server, and how often.
+Each rate is an average over the whole window, so one burst and a
+steady trickle of the same size read alike.  Call
+`herdr-api-reset-traffic', wait a known stretch, and report again to
+measure that stretch on its own.
+
+The blocked column is how long Emacs spent waiting for replies, and
+the slowest column the longest single wait.  A request that timed out
+shows in the second and is lost in the first.  The total counts a
+stretch of waiting once however many requests were nested in it, so it
+can be less than the rows above it add up to.
+
+The events row counts what arrived on the subscriptions.  Divided into
+the request count, it says how many requests each event costs.
+
+Call `herdr-api-traffic' for the same figures as data."
+  (interactive)
+  (let ((elapsed (max (- (float-time) herdr-api--traffic-since) 0.001))
+        (baseline herdr-api--traffic-baseline)
+        (rows (herdr-api--traffic-rows)))
+    (with-current-buffer (get-buffer-create "*herdr-api-traffic*")
+      (unless (derived-mode-p 'special-mode)
+        (special-mode))
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "herdr API traffic over %.1f seconds\n\n" elapsed))
+        (insert (format herdr-api--traffic-columns
+                        "Method" "Count" "Per sec" "Blocked" "Slowest"))
+        (dolist (row rows)
+          (insert (herdr-api--traffic-row (nth 0 row) (nth 1 row)
+                                          (nth 2 row) (nth 3 row) elapsed)))
+        (insert (herdr-api--traffic-row
+                 "total"
+                 (apply #'+ (mapcar (lambda (row) (nth 1 row)) rows))
+                 (- herdr-api--traffic-blocked
+                    (or (plist-get baseline :blocked-seconds) 0))
+                 (apply #'max 0 (mapcar (lambda (row) (nth 3 row)) rows))
+                 elapsed))
+        (insert "\n")
+        (insert (herdr-api--traffic-row "events received"
+                                        (- herdr-api--traffic-events
+                                           (or (plist-get baseline :events)
+                                               0))
+                                        nil nil elapsed)))
+      (goto-char (point-min))
+      (display-buffer (current-buffer)))))
+
+;;;###autoload
+(defun herdr-api-reset-traffic ()
+  "Begin a fresh window for `herdr-api-report-traffic'.
+The counts are not cleared, because a caller sampling them for a
+metrics system needs them to keep rising; see `herdr-api-traffic'.
+What is recorded is where the window starts, and the report subtracts
+that.  The slowest wait of each method is the exception and is
+forgotten, being the one figure no subtraction recovers."
+  (interactive)
+  (setq herdr-api--traffic-baseline (herdr-api-traffic)
+        herdr-api--traffic-since (float-time))
+  (clrhash herdr-api--traffic-slowest)
+  (message "herdr-api: reporting from here on"))
 
 ;;; Connections
 
@@ -163,7 +373,21 @@ This spends one connection, because the server answers a single
 request and then closes it.  It blocks until the answer arrives, and a
 process filter runs with quitting inhibited, so do not call it from
 one: an event callback that does will freeze Emacs until the timeout
-expires, with no way to interrupt it."
+expires, with no way to interrupt it.
+
+The call is timed for `herdr-api-report-traffic', a failed one
+included: a request that could not reach the server is the slowest of
+all, and leaving it out of the count would hide it."
+  (let ((start (float-time))
+        (herdr-api--traffic-depth (1+ herdr-api--traffic-depth)))
+    (unwind-protect
+        (herdr-api--exchange method params)
+      (herdr-api--note-request method start))))
+
+(defun herdr-api--exchange (method params)
+  "Spend one connection calling METHOD with PARAMS and return its result.
+See `herdr-api-request', which is this plus the timing and is what
+callers use."
   (let ((process (herdr-api--connect "herdr-api"))
         (id (herdr-api--next-id)))
     (unwind-protect
@@ -360,6 +584,7 @@ acknowledgement is a result rather than an event and is not delivered."
                                         (gethash "message" body)
                                         (gethash "code" body)))))
           ((gethash "event" message)
+           (herdr-api--note-event)
            ;; A signal here would abandon the rest of the queue, and a
            ;; process filter is nowhere for a backtrace to go.
            (with-demoted-errors "herdr-api event callback: %S"

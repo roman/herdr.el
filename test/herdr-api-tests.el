@@ -410,6 +410,158 @@ Delivering straight from the filter would send the newer batch first."
             (should (equal (reverse seen) '("bad" "good"))))
         (herdr-api-unsubscribe process)))))
 
+;;; Traffic
+
+(defmacro herdr-api-with-fresh-traffic (&rest body)
+  "Run BODY with the traffic counts empty and restore them afterwards.
+The counts are global and accumulate for as long as Emacs runs, so a
+test that read them unbound would depend on which tests ran first."
+  (declare (indent 0) (debug t))
+  `(let ((herdr-api--traffic (make-hash-table :test #'equal))
+         (herdr-api--traffic-slowest (make-hash-table :test #'equal))
+         (herdr-api--traffic-blocked 0)
+         (herdr-api--traffic-events 0)
+         (herdr-api--traffic-baseline nil)
+         (herdr-api--traffic-since (float-time)))
+     ,@body))
+
+(ert-deftest herdr-api-request:counts-each-method ()
+  "Every call is counted under its own method name."
+  (herdr-api-with-fresh-traffic
+    (herdr-api-with-test-server (herdr-api-test-ok '(:type "pong"))
+      (herdr-api-request "ping")
+      (herdr-api-request "ping")
+      (herdr-api-request "session.snapshot")
+      (should (equal (car (gethash "ping" herdr-api--traffic)) 2))
+      (should (equal (car (gethash "session.snapshot" herdr-api--traffic))
+                     1)))))
+
+(ert-deftest herdr-api-request:counts-a-call-that-failed ()
+  "A request that never reached the server is the slowest kind there is.
+Counting only the successes would report a stalled session as quiet."
+  (herdr-api-with-fresh-traffic
+    (let ((herdr-api-socket "/nonexistent/herdr.sock"))
+      (should-error (herdr-api-request "ping") :type 'herdr-api-unavailable))
+    (should (equal (car (gethash "ping" herdr-api--traffic)) 1))))
+
+(ert-deftest herdr-api-request:records-no-more-than-it-waited ()
+  "A recorded wait longer than the wall clock it happened in is wrong."
+  (herdr-api-with-fresh-traffic
+    (herdr-api-with-test-server (herdr-api-test-ok '(:type "pong"))
+      (let ((before (float-time)))
+        (herdr-api-request "ping")
+        (should (<= (nth 1 (gethash "ping" herdr-api--traffic))
+                    (- (float-time) before)))))))
+
+(ert-deftest herdr-api--note-request:counts-a-nested-wait-once ()
+  "Waiting runs timers, so a refresh can begin inside an outer wait.
+Adding both spans to the total would report more waiting than the
+window holding it, which is the one figure a reader checks first."
+  (herdr-api-with-fresh-traffic
+    (let ((start (- (float-time) 0.2)))
+      (let ((herdr-api--traffic-depth 2))
+        (herdr-api--note-request "inner" start))
+      (let ((herdr-api--traffic-depth 1))
+        (herdr-api--note-request "outer" start)))
+    ;; Between one span of 0.2 and the two the bug would add, clear of
+    ;; both: `float-time' rounds, so 0.2 can come back a shade under.
+    (should (> herdr-api--traffic-blocked 0.15))
+    (should (< herdr-api--traffic-blocked 0.3))))
+
+(ert-deftest herdr-api--note-request:keeps-the-slowest-wait ()
+  "One request that timed out is the symptom, and a mean hides it."
+  (herdr-api-with-fresh-traffic
+    (herdr-api--note-request "ping" (- (float-time) 0.3))
+    (herdr-api--note-request "ping" (float-time))
+    ;; Well clear of both spans rather than exactly on one: `float-time'
+    ;; rounds, so the recorded 0.3 can come back a shade under it.
+    (should (> (gethash "ping" herdr-api--traffic-slowest) 0.25))))
+
+(ert-deftest herdr-api-subscribe:counts-events-not-the-ack ()
+  "Only events are counted, so the count can be read against requests."
+  (herdr-api-with-fresh-traffic
+    (herdr-api-with-test-server #'ignore
+      (let ((process (herdr-api-subscribe '("pane.updated") #'ignore)))
+        (unwind-protect
+            (progn
+              (herdr-api--event-filter
+               process
+               (concat (json-serialize '(:id "emacs-1" :result nil)) "\n"
+                       (json-serialize '(:event "pane_updated" :data nil))
+                       "\n"
+                       (json-serialize '(:event "pane_updated" :data nil))
+                       "\n"))
+              (should (equal herdr-api--traffic-events 2)))
+          (herdr-api-unsubscribe process))))))
+
+(ert-deftest herdr-api--traffic-rows:orders-by-count ()
+  "The busiest method is the one a reader needs first."
+  (herdr-api-with-fresh-traffic
+    (herdr-api--note-request "quiet" (float-time))
+    (herdr-api--note-request "busy" (float-time))
+    (herdr-api--note-request "busy" (float-time))
+    (should (equal (mapcar #'car (herdr-api--traffic-rows))
+                   '("busy" "quiet")))))
+
+(ert-deftest herdr-api-reset-traffic:empties-the-report ()
+  "A measurement of one stretch needs the earlier ones left out of it."
+  (herdr-api-with-fresh-traffic
+    (let ((herdr-api--traffic-depth 1))
+      (herdr-api--note-request "ping" (float-time)))
+    (herdr-api--note-event)
+    (herdr-api-reset-traffic)
+    (should (null (herdr-api--traffic-rows)))))
+
+(ert-deftest herdr-api-reset-traffic:keeps-the-counts-rising ()
+  "A metrics reader needs counters that only ever go up.
+Clearing them on reset would read to a scraper as a restarted process
+and throw away every rate spanning the reset."
+  (herdr-api-with-fresh-traffic
+    (let ((herdr-api--traffic-depth 1))
+      (herdr-api--note-request "ping" (float-time)))
+    (herdr-api--note-event)
+    (herdr-api-reset-traffic)
+    (let ((traffic (herdr-api-traffic)))
+      (should (equal (plist-get traffic :events) 1))
+      (should (equal (plist-get (cdr (assoc "ping"
+                                            (plist-get traffic :requests)))
+                                :count)
+                     1)))))
+
+(ert-deftest herdr-api--traffic-rows:counts-only-the-window ()
+  "What the report shows is the counts less the baseline reset took."
+  (herdr-api-with-fresh-traffic
+    (herdr-api--note-request "ping" (float-time))
+    (herdr-api--note-request "ping" (float-time))
+    (herdr-api-reset-traffic)
+    (herdr-api--note-request "ping" (float-time))
+    (let ((rows (herdr-api--traffic-rows)))
+      (should (equal (length rows) 1))
+      (should (equal (nth 0 (car rows)) "ping"))
+      (should (equal (nth 1 (car rows)) 1)))))
+
+(ert-deftest herdr-api-traffic:reports-the-slowest-of-the-window ()
+  "The slowest wait belongs to its window, not to the whole run.
+It is a gauge rather than a counter, so a reset forgets it instead of
+holding the all-time worst for as long as Emacs runs."
+  (herdr-api-with-fresh-traffic
+    (herdr-api--note-request "ping" (- (float-time) 0.3))
+    (herdr-api-reset-traffic)
+    (herdr-api--note-request "ping" (float-time))
+    (should (< (plist-get (cdr (assoc "ping"
+                                      (plist-get (herdr-api-traffic)
+                                                 :requests)))
+                          :slowest)
+               0.3))))
+
+(ert-deftest herdr-api-report-traffic:reports-an-untouched-server ()
+  "The report has to render before anything has been counted."
+  (herdr-api-with-fresh-traffic
+    (herdr-api-report-traffic)
+    (with-current-buffer "*herdr-api-traffic*"
+      (should (string-match-p "total" (buffer-string)))
+      (should (string-match-p "events received" (buffer-string))))))
+
 ;;; _
 (provide 'herdr-api-tests)
 ;; Local Variables:
