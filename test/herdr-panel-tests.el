@@ -313,6 +313,155 @@ nothing at all.  The second half is the state this guards against."
     (should-not (let ((completion-category-defaults nil))
                   (completion-all-completions "herdr" table nil 5)))))
 
+;;; Marking The Row Point Rests On
+
+(defmacro herdr-panel-tests-with-rows (&rest body)
+  "Evaluate BODY in a panel of two rows, shown in the selected window.
+Shown rather than merely current, because the highlight is only put on
+the buffer the selected window holds."
+  (declare (indent 0) (debug t))
+  `(herdr-panel-with-buffer "*herdr-test-panel*"
+     (save-window-excursion
+       (set-window-buffer (selected-window) buffer)
+       (magit-section-mode)
+       (herdr-panel-init #'ignore #'ignore)
+       (let ((inhibit-read-only t))
+         (magit-insert-section (herdr-test-root)
+           (herdr-panel-insert-title "Test")
+           (magit-insert-section (herdr-test-row "one")
+             (herdr-panel-insert-entry
+              '(:status "idle" :label "one" :detail "under one")))
+           (magit-insert-section (herdr-test-row "two")
+             (herdr-panel-insert-entry '(:status "idle" :label "two")))))
+       ,@body)))
+
+(defun herdr-panel-tests-point-overlay ()
+  "Return the bounds of this panel's point overlay, or nil when it has none."
+  (and (overlayp herdr-panel--point-overlay)
+       (overlay-buffer herdr-panel--point-overlay)
+       (cons (overlay-start herdr-panel--point-overlay)
+             (overlay-end herdr-panel--point-overlay))))
+
+(defun herdr-panel-tests-row-bounds ()
+  "Return the bounds of the row at point, as numbers.
+A section keeps markers, and a marker is not `equal' to the position
+an overlay reports for the same place."
+  (let ((section (magit-current-section)))
+    (cons (marker-position (oref section start))
+          (marker-position (oref section end)))))
+
+(ert-deftest herdr-panel-track-point:covers-the-whole-row ()
+  "An entry is one row however many lines it takes.
+A highlight standing in for a cursor has to cover the detail line
+under the name, or it says the row is only its first line."
+  (herdr-panel-tests-with-rows
+    (herdr-panel-first-row)
+    (herdr-panel-track-point)
+    (let ((bounds (herdr-panel-tests-row-bounds)))
+      (should (equal (herdr-panel-tests-point-overlay) bounds))
+      (should (> (count-lines (car bounds) (cdr bounds)) 1)))))
+
+(ert-deftest herdr-panel-track-point:follows-point-between-rows ()
+  "One overlay is moved rather than a second one made."
+  (herdr-panel-tests-with-rows
+    (herdr-panel-first-row)
+    (herdr-panel-track-point)
+    (let ((first (herdr-panel-tests-point-overlay)))
+      (herdr-panel-next-row)
+      (herdr-panel-track-point)
+      (should-not (equal (herdr-panel-tests-point-overlay) first))
+      (should (equal (herdr-panel-tests-point-overlay)
+                     (herdr-panel-tests-row-bounds))))))
+
+(ert-deftest herdr-panel-track-point:marks-nothing-off-the-rows ()
+  "The title stands for no pane, so there is nothing to be on."
+  (herdr-panel-tests-with-rows
+    (herdr-panel-first-row)
+    (herdr-panel-track-point)
+    (goto-char (point-min))
+    (herdr-panel-track-point)
+    (should-not (herdr-panel-tests-point-overlay))))
+
+(ert-deftest herdr-panel-track-point:marks-nothing-in-an-unselected-panel ()
+  "A panel nobody is working in shows no cursor and stands for none.
+This is what keeps the highlight off an attention fill: step out of
+the panel and every row is its own colour again."
+  (herdr-panel-tests-with-rows
+    (herdr-panel-first-row)
+    (herdr-panel-track-point)
+    (should (herdr-panel-tests-point-overlay))
+    (set-window-buffer (selected-window) (get-buffer-create "*scratch*"))
+    (herdr-panel-track-point-everywhere)
+    (should-not (herdr-panel-tests-point-overlay))))
+
+(ert-deftest herdr-panel-init:takes-both-cursors-away ()
+  "The highlight replaces the cursor rather than joining it.
+Two of them have to go.  `cursor-type' is the one in the window you
+are in, and `cursor-in-non-selected-windows' is the hollow box drawn
+in every other one, which lands on the space a row opens with and puts
+a square at the left of every panel at once."
+  (herdr-panel-with-buffer "*herdr-test-panel*"
+    (let ((herdr-panel-point-style 'row))
+      (herdr-panel-init #'ignore #'ignore)
+      (should (null cursor-type))
+      (should (null cursor-in-non-selected-windows))))
+  (herdr-panel-with-buffer "*herdr-test-panel*"
+    (let ((herdr-panel-point-style 'cursor))
+      (herdr-panel-init #'ignore #'ignore)
+      (should (eq cursor-type (default-value 'cursor-type)))
+      (should (eq cursor-in-non-selected-windows
+                  (default-value 'cursor-in-non-selected-windows))))))
+
+(ert-deftest herdr-panel-track-point:takes-the-cursor-away-again ()
+  "A cursor put back by somebody else is taken off after each command.
+evil writes `cursor-type' from the current state whenever it
+refreshes, so a value set once at mode setup is gone by the first
+keystroke."
+  (herdr-panel-tests-with-rows
+    (herdr-panel-first-row)
+    (setq-local cursor-type 'box)
+    (herdr-panel-track-point)
+    (should (null cursor-type))))
+
+(ert-deftest herdr-panel-track-point:marks-nothing-when-told-not-to ()
+  "`cursor' leaves the buffer exactly as it was before this existed."
+  (herdr-panel-tests-with-rows
+    (let ((herdr-panel-point-style 'cursor))
+      (herdr-panel-first-row)
+      (herdr-panel-track-point)
+      (should-not (herdr-panel-tests-point-overlay)))))
+
+;;; Opening A Row With The Mouse
+
+(ert-deftest herdr-panel-visit-click:lands-on-the-row-before-opening-it ()
+  "A click opens the row it was made on, not the one point rested on.
+Every panel answers what a row stands for from the section at point,
+so the order of these two is the whole of the command."
+  (let ((done nil))
+    (cl-letf (((symbol-function 'mouse-set-point)
+               (lambda (&rest _) (push 'point done)))
+              ((symbol-function 'herdr-panel-visit)
+               (lambda (&optional _other) (push 'visit done))))
+      (herdr-panel-visit-click nil)
+      (should (equal (nreverse done) '(point visit))))))
+
+(ert-deftest herdr-panel-visit-click:carries-the-prefix-argument ()
+  "A click inverts the way a row opens, as RET on it would.
+`herdr-panel-visit' reads the prefix argument itself when it is
+typed, and a command calling it has to hand the argument over."
+  (let ((other 'unset))
+    (cl-letf (((symbol-function 'mouse-set-point) #'ignore)
+              ((symbol-function 'herdr-panel-visit)
+               (lambda (&optional argument) (setq other argument))))
+      (let ((current-prefix-arg '(4)))
+        (herdr-panel-visit-click nil))
+      (should (equal other '(4))))))
+
+(ert-deftest herdr-panel-mode-map:opens-a-row-on-a-click ()
+  "One binding covers every panel, because they all inherit this map."
+  (should (eq (keymap-lookup herdr-panel-mode-map "<mouse-1>")
+              #'herdr-panel-visit-click)))
+
 ;;; Choosing How To Open
 
 (ert-deftest herdr-panel-access:inverts-on-a-prefix-argument ()

@@ -253,6 +253,22 @@ See `herdr-panel-attention-blocked' for why a whole row is filled and
 how the fill merges."
   :group 'herdr-panel)
 
+(defface herdr-panel-point
+  '((((background dark)) :background "#45475a" :extend t)
+    (((background light)) :background "#bcc0cc" :extend t)
+    (t :inherit region))
+  "Face marking the row point rests on, in place of the block cursor.
+A panel is a list to walk, and a square sitting on one character of a
+row says less about where you are than the row itself does.  A step
+brighter than `herdr-panel-current', so that the row you are on and
+the pane you are looking at stay apart when they are not the same row.
+
+This one is an overlay rather than a merged face, so on the row it
+covers it hides whatever fill was underneath, an attention fill
+included.  That is why it is shown only while the panel window is
+selected: leave the panel and every row is its own colour again."
+  :group 'herdr-panel)
+
 (defconst herdr-panel-status-faces
   '(("blocked" . herdr-panel-blocked)
     ("done" . herdr-panel-done)
@@ -518,6 +534,19 @@ construct to choose your own."
   :group 'herdr-panel
   :type '(choice (const :tag "None" nil) sexp))
 
+(defcustom herdr-panel-point-style 'row
+  "How a panel marks the row point rests on.
+`row' takes the block cursor away and highlights the whole row with
+`herdr-panel-point' instead, for as long as the panel window is
+selected.  An entry is one row however many lines it takes, and the
+highlight covers all of them, which a cursor cannot say.
+
+`cursor' marks nothing and leaves the ordinary cursor where it was."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(choice (const :tag "Highlight the whole row" row)
+                 (const :tag "Leave the block cursor" cursor)))
+
 (defvar-local herdr-panel-refresh-function nil
   "Function redrawing this panel, or nil in a buffer that is not one.")
 
@@ -550,7 +579,75 @@ stands for."
               (if (eq herdr-panel-mode-line 'mode-line-format)
                   (default-value 'mode-line-format)
                 herdr-panel-mode-line))
+  (when (eq herdr-panel-point-style 'row)
+    ;; Two cursors to take away, and neither covers the other.  This one
+    ;; is the hollow box Emacs draws in a window nobody is in, which
+    ;; `cursor-type' does not reach, and which lands on the space a row
+    ;; opens with — a square at the very left of every panel at once.
+    (setq-local cursor-in-non-selected-windows nil)
+    (herdr-panel-hide-cursor)
+    (add-hook 'post-command-hook #'herdr-panel-track-point nil t))
   (add-hook 'kill-buffer-hook #'herdr-panel-unwatch nil t))
+
+;;; The Row Point Rests On
+
+;; Three things want to colour a row: the pane in front of you, a status
+;; that wants you, and where point is.  The first two are merged into the
+;; text and can share it.  This one cannot — it has to follow point
+;; without a redraw, so it is an overlay, and an overlay covers what is
+;; under it.  Showing it only in the selected window is what keeps it from
+;; standing on an attention fill for as long as Emacs is running: step out
+;; of the panel and the row goes back to saying what it is.
+
+(defvar-local herdr-panel--point-overlay nil
+  "Overlay marking the row point rests on, or nil when there is none.")
+
+(defun herdr-panel--point-overlay ()
+  "Return this panel's point overlay, making one if it has none."
+  (if (overlayp herdr-panel--point-overlay)
+      herdr-panel--point-overlay
+    (setq herdr-panel--point-overlay
+          (let ((overlay (make-overlay (point-min) (point-min) nil nil t)))
+            (overlay-put overlay 'face 'herdr-panel-point)
+            ;; Above the fills merged into the text, and named rather
+            ;; than left at nil so that it is one number to change when
+            ;; something else wants to draw over a row.
+            (overlay-put overlay 'priority 1)
+            overlay))))
+
+(defun herdr-panel-hide-cursor ()
+  "Take the cursor off this panel, for as long as it stays off.
+Said again after every command rather than once, because evil sets
+`cursor-type' from the current state whenever it refreshes, and a
+value written once at mode setup is gone by the first keystroke."
+  (unless (null cursor-type)
+    (setq-local cursor-type nil)))
+
+(defun herdr-panel-track-point (&rest _)
+  "Mark the row point rests on in this panel, or unmark it.
+Marked only while this buffer is the selected window's, because the
+highlight stands in for a cursor and an unselected window shows none.
+The cursor is taken off here too: both answer the one question of how
+a panel says where you are."
+  (when (and herdr-panel-refresh-function
+             (eq herdr-panel-point-style 'row))
+    (herdr-panel-hide-cursor)
+    (if-let* (((eq (current-buffer) (window-buffer (selected-window))))
+              ((herdr-panel-row-p))
+              (section (magit-current-section)))
+        (move-overlay (herdr-panel--point-overlay)
+                      (oref section start) (oref section end))
+      (when (overlayp herdr-panel--point-overlay)
+        (delete-overlay herdr-panel--point-overlay)))))
+
+(defun herdr-panel-track-point-everywhere (&rest _)
+  "Mark the row point rests on in every panel there is.
+For the moment the selection moves: the panel being left runs no
+command of its own to notice, and would keep its highlight."
+  (dolist (buffer (buffer-list))
+    (when (buffer-local-value 'herdr-panel-refresh-function buffer)
+      (with-current-buffer buffer
+        (herdr-panel-track-point)))))
 
 ;;; Moving Between Rows
 
@@ -621,7 +718,11 @@ window that was not selected at the time."
     (unless (save-excursion
               (goto-char (window-point window))
               (herdr-panel-row-p))
-      (set-window-point window (point)))))
+      (set-window-point window (point))))
+  ;; `erase-buffer' leaves the point overlay collapsed at the top of the
+  ;; buffer, and a redraw on a timer is followed by no command that would
+  ;; put it back.
+  (herdr-panel-track-point))
 
 ;;; Acting on a Row
 
@@ -634,6 +735,16 @@ With a prefix argument OTHER, open it the other way round from
     (user-error "Not in a herdr panel"))
   (herdr-panel-open-pane (funcall herdr-panel-pane-function)
                          (herdr-panel-access other)))
+
+(defun herdr-panel-visit-click (event)
+  "Show the terminal for the row EVENT was clicked on.
+Point moves to the click before anything else, because every panel
+answers what a row stands for from the section at point: a command
+that only opened would open whatever the cursor was resting on.  A
+prefix argument means here what it means to `herdr-panel-visit'."
+  (interactive "e")
+  (mouse-set-point event)
+  (herdr-panel-visit current-prefix-arg))
 
 (defun herdr-panel-access (invert)
   "Return how to open a terminal, INVERT swapping the usual answer.
@@ -732,6 +843,11 @@ among identical ones says the others are something else."
   :doc "Keymap shared by the herdr panels."
   :parent magit-section-mode-map
   "RET" #'herdr-panel-visit
+  ;; The up event, so that dragging to select text still selects it:
+  ;; a drag ends in `drag-mouse-1' and never reaches this.  Only the
+  ;; double click is spoken for upstream, where magit-section toggles a
+  ;; section with it.
+  "<mouse-1>" #'herdr-panel-visit-click
   "n" #'herdr-panel-next-row
   "p" #'herdr-panel-previous-row
   "<down>" #'herdr-panel-next-row
@@ -807,6 +923,8 @@ fact about Emacs, so no event from herdr will report any of it."
 Idempotent, so every panel may call it as it opens."
   (add-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
   (add-hook 'window-selection-change-functions #'herdr-panel--note-marks)
+  (add-hook 'window-selection-change-functions
+            #'herdr-panel-track-point-everywhere)
   ;; Also on a window changing buffer, which is how a terminal opened or
   ;; killed elsewhere becomes visible to the panels.
   (add-hook 'window-buffer-change-functions #'herdr-panel--note-marks)
@@ -824,6 +942,8 @@ Idempotent, so every panel may call it as it opens."
                     (buffer-list))
     (remove-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
     (remove-hook 'window-selection-change-functions #'herdr-panel--note-marks)
+    (remove-hook 'window-selection-change-functions
+                 #'herdr-panel-track-point-everywhere)
     (remove-hook 'window-buffer-change-functions #'herdr-panel--note-marks)
     (remove-hook 'herdr-session-fingerprint-functions #'herdr-panel-marks)))
 
