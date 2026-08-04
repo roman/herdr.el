@@ -57,6 +57,148 @@ workspaces into one space."
                                   :checkout_path "/repo"
                                   :is_linked_worktree :false)))))
 
+(defmacro herdr-session-with-unread (&rest body)
+  "Evaluate BODY with this Emacs deciding which finishes are unread.
+The tables start empty, so a test opens on a session it has never
+looked at, and neither table outlives it."
+  (declare (indent 0) (debug t))
+  `(let ((herdr-session-finish-seen-by 'emacs)
+         (herdr-session--reported (make-hash-table :test #'equal))
+         (herdr-session--unread (make-hash-table :test #'equal)))
+     ,@body))
+
+(defun herdr-session-test-tree (agents)
+  "Return a snapshot holding AGENTS, each a (PANE-ID STATUS) list.
+Every agent sits in tab `w1:t1' of workspace `w1', both of them idle:
+what varies in these tests is an agent's status, and the rollups above
+it are there to be raised by one."
+  (list :workspaces
+        (vector (herdr-session-test-workspace "w1" "herdr" "idle"))
+        :tabs
+        (vector (list :tab_id "w1:t1" :workspace_id "w1"
+                      :agent_status "idle" :number 1))
+        :agents
+        (vconcat
+         (mapcar (pcase-lambda (`(,pane ,status))
+                   (list :pane_id pane :agent "claude"
+                         :agent_status status
+                         :tab_id "w1:t1" :workspace_id "w1"))
+                 agents))))
+
+(defmacro herdr-session-looking-at (agents &rest body)
+  "Set the tree to AGENTS, note which of them finished, then run BODY.
+AGENTS is a list of (PANE-ID STATUS).  BODY runs inside the tree, so
+that it can ask what the session now reports."
+  (declare (indent 1) (debug t))
+  `(herdr-session-with-snapshot (herdr-session-test-tree ,agents)
+     (herdr-session--note-finishes)
+     ,@body))
+
+;;; Finishes This Emacs Has Not Seen
+
+(ert-deftest herdr-session-status:takes-herdrs-word-by-default ()
+  "Nothing is marked while herdr owns the question.
+The default has to leave a session behaving as it always did, however
+long this Emacs has been watching it."
+  (let ((herdr-session-finish-seen-by 'herdr)
+        (herdr-session--reported (make-hash-table :test #'equal))
+        (herdr-session--unread (make-hash-table :test #'equal)))
+    (herdr-session-looking-at '(("w1:p1" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle"))
+      (should-not (herdr-session-unread-p "w1:p1"))
+      (should (equal (herdr-session-status (herdr-session-agent "w1:p1"))
+                     "idle")))))
+
+(ert-deftest herdr-session--note-finishes:says-nothing-on-the-first-look ()
+  "A first sighting is not a transition.
+Read as one, every agent resting when Emacs connected would come up
+green at once, which is what starting Emacs would look like."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "idle") ("w1:p2" "done"))
+      (should-not (herdr-session-unread-p "w1:p1"))
+      (should-not (herdr-session-unread-p "w1:p2")))))
+
+(ert-deftest herdr-session-status:reports-an-unread-finish-as-done ()
+  "A finish herdr called seen is reported as done until it is read.
+herdr writes `seen' from whether the pane is its own workspace's
+active tab and whether the terminal running herdr holds focus, so a
+workspace of one tab reaches \"done\" never."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle"))
+      (should (herdr-session-unread-p "w1:p1"))
+      (should (equal (herdr-session-status (herdr-session-agent "w1:p1"))
+                     "done")))))
+
+(ert-deftest herdr-session-status:raises-the-tab-and-the-workspace ()
+  "A row above an unread pane says so, or a collapsed space hides it.
+herdr rolls a pane's status up itself, and the roll-up it sent was
+computed from the status it also sent, so raising the pane alone would
+leave the two disagreeing."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle"))
+      (should (equal (herdr-session-status (herdr-session-workspace "w1"))
+                     "done"))
+      (should (equal (herdr-session-status (car (herdr-session-tabs "w1")))
+                     "done")))))
+
+(ert-deftest herdr-session-status:leaves-a-louder-rollup-alone ()
+  "Only an idle row is raised.
+A workspace herdr reports as working has something running in it, and
+saying it finished would be false as well as quieter."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working") ("w1:p2" "working")))
+    (herdr-session-with-snapshot
+        (let ((tree (herdr-session-test-tree '(("w1:p1" "idle")
+                                               ("w1:p2" "working")))))
+          (plist-put tree :workspaces
+                     (vector (herdr-session-test-workspace
+                              "w1" "herdr" "working"))))
+      (herdr-session--note-finishes)
+      (should (herdr-session-unread-p "w1:p1"))
+      (should (equal (herdr-session-status (herdr-session-workspace "w1"))
+                     "working")))))
+
+(ert-deftest herdr-session--note-finishes:clears-when-work-starts-again ()
+  "Answering an agent is reading its last finish.
+This is the ordinary way a mark goes away: the reader comes back,
+types, and the pane leaves the state it was marked in."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle")))
+    (herdr-session-looking-at '(("w1:p1" "working"))
+      (should-not (herdr-session-unread-p "w1:p1")))))
+
+(ert-deftest herdr-session-mark-seen:clears-one-pane ()
+  "Going to a pane deliberately is reading it."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working") ("w1:p2" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle") ("w1:p2" "idle"))
+      (herdr-session-mark-seen "w1:p1")
+      (should-not (herdr-session-unread-p "w1:p1"))
+      (should (herdr-session-unread-p "w1:p2")))))
+
+(ert-deftest herdr-session--note-finishes:stays-marked-while-idle ()
+  "A finish nobody read is still unread on the next look.
+The tree is re-read several times a second, and a mark that survived
+only one reading would flash and go."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle")))
+    (herdr-session-looking-at '(("w1:p1" "idle"))
+      (should (herdr-session-unread-p "w1:p1")))))
+
+(ert-deftest herdr-session--note-finishes:forgets-a-pane-that-is-gone ()
+  "A pane herdr no longer reports takes its mark with it.
+Left behind, the table would grow for as long as Emacs runs and would
+raise the next pane that happened to reuse the identifier."
+  (herdr-session-with-unread
+    (herdr-session-looking-at '(("w1:p1" "working")))
+    (herdr-session-looking-at '(("w1:p1" "idle")))
+    (herdr-session-looking-at '(("w1:p2" "working"))
+      (should-not (herdr-session-unread-p "w1:p1")))))
+
 ;;; Status Rollup
 
 (ert-deftest herdr-session-status-max:ranks-by-attention ()

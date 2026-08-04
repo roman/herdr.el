@@ -53,6 +53,15 @@ and none of what it answers is what these tests are about."
   `(let ((herdr-spaces-git nil))
      (herdr-session-with-snapshot ,snapshot ,@body)))
 
+(defun herdr-spaces-tests--fill-at (text)
+  "Return the faces on the first character of TEXT, as a list.
+Point is left where the search ended.  Rows are found by what they
+say, because a space of several members draws its heading and its
+members in an order this does not want to depend on."
+  (goto-char (point-min))
+  (search-forward text)
+  (ensure-list (get-text-property (match-beginning 0) 'face)))
+
 ;;; Finding The Pane For A Workspace
 
 (ert-deftest herdr-spaces--pane:answers-with-the-active-tab ()
@@ -125,6 +134,49 @@ member in the prompt twice under two names."
   (herdr-spaces-with-snapshot (list :workspaces (vector) :panes (vector))
     (herdr-panel-tests-offline
       (should-error (herdr-spaces--read) :type 'user-error))))
+
+;;; Filling A Space That Wants The User
+
+(ert-deftest herdr-spaces--insert:fills-a-group-holding-a-blocked-member ()
+  "A space says that something inside it is waiting, collapsed or not.
+The heading carries the loudest status among its members, so a group
+drawn without the fill would hide the one row that wanted attention
+behind a heading that looked quiet."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "main" "idle"
+                                                 "repo-a")
+                    (herdr-session-test-workspace "w2" "fix" "blocked"
+                                                  "repo-a"))
+            :panes
+            (vector (herdr-spaces-tests--pane "w1:p1" "w1")
+                    (herdr-spaces-tests--pane "w2:p1" "w2")))
+    (with-temp-buffer
+      (magit-insert-section (herdr-spaces-tests-root)
+        (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+      (should (memq 'herdr-panel-attention-blocked
+                    (herdr-spaces-tests--fill-at "repo-a")))
+      (should (memq 'herdr-panel-attention-blocked
+                    (herdr-spaces-tests--fill-at "fix")))
+      (should-not (memq 'herdr-panel-attention-blocked
+                        (herdr-spaces-tests--fill-at "main"))))))
+
+(ert-deftest herdr-spaces--insert:leaves-a-quiet-group-unfilled ()
+  "A space with nothing waiting in it draws as it always did."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "main" "idle"
+                                                 "repo-a")
+                    (herdr-session-test-workspace "w2" "fix" "working"
+                                                  "repo-a"))
+            :panes
+            (vector (herdr-spaces-tests--pane "w1:p1" "w1")
+                    (herdr-spaces-tests--pane "w2:p1" "w2")))
+    (with-temp-buffer
+      (magit-insert-section (herdr-spaces-tests-root)
+        (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+      (should-not (memq 'herdr-panel-attention-blocked
+                        (herdr-spaces-tests--fill-at "repo-a"))))))
 
 ;;; _
 (provide 'herdr-spaces-tests)

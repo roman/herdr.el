@@ -306,7 +306,7 @@ clicking one shows a terminal for it."
          (current (equal id (gethash "tab_id" pane)))
          (label (format " %s%s "
                         (herdr-panel-status-symbol
-                         (gethash "agent_status" tab))
+                         (herdr-session-status tab))
                         (or (gethash "label" tab) (gethash "number" tab)))))
     (propertize label
                 'face (if current 'tab-line-tab-current 'tab-line-tab-inactive)

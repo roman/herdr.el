@@ -195,7 +195,7 @@ several agents share a status.  Kinds in `herdr-agents-hidden-kinds'
 are left out."
   (seq-sort-by (lambda (agent)
                  (herdr-session-status-priority
-                  (gethash "agent_status" agent)))
+                  (herdr-session-status agent)))
                #'>
                (seq-remove (lambda (agent)
                              (member (gethash "agent" agent)
@@ -207,7 +207,7 @@ are left out."
 Which workspace and window an agent sits in is what tells two agents
 of the same kind apart, so that names the row and the kind follows it
 rather than the other way round."
-  (list :status (gethash "agent_status" agent)
+  (list :status (herdr-session-status agent)
         :emphasis (herdr-panel-emphasis (gethash "pane_id" agent) current)
         :label (herdr-agents--where agent)
         :aside (herdr-agents--kind agent)

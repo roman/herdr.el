@@ -181,6 +181,7 @@ This blocks, so it must not run from a process filter; see
   (interactive "p")
   (setq herdr-session--snapshot
         (gethash "snapshot" (herdr-api-request "session.snapshot")))
+  (herdr-session--note-finishes)
   (let ((fingerprint (herdr-session--fingerprint)))
     (when (or force (not (equal fingerprint herdr-session--fingerprint)))
       (setq herdr-session--fingerprint fingerprint)
@@ -194,26 +195,26 @@ and scroll positions does not count as a change."
   (list (mapcar (lambda (workspace)
                   (list (gethash "workspace_id" workspace)
                         (gethash "label" workspace)
-                        (gethash "agent_status" workspace)
+                        (herdr-session-status workspace)
                         (gethash "focused" workspace)
                         (herdr-session-space-key workspace)))
                 (herdr-session-workspaces))
         (mapcar (lambda (tab)
                   (list (gethash "tab_id" tab)
                         (gethash "label" tab)
-                        (gethash "agent_status" tab)
+                        (herdr-session-status tab)
                         (gethash "focused" tab)))
                 (herdr-session-tabs))
         (mapcar (lambda (agent)
                   (list (gethash "pane_id" agent)
                         (gethash "agent" agent)
-                        (gethash "agent_status" agent)
+                        (herdr-session-status agent)
                         (gethash "terminal_title_stripped" agent)
                         (gethash "focused" agent)))
                 (herdr-session-agents))
         (mapcar (lambda (pane)
                   (list (gethash "pane_id" pane)
-                        (gethash "agent_status" pane)
+                        (herdr-session-status pane)
                         (gethash "focused" pane)))
                 (herdr-session-panes))
         (mapcar #'funcall herdr-session-fingerprint-functions)))
@@ -302,6 +303,129 @@ once an interval for as long as Emacs runs."
   (and herdr-session--snapshot
        (gethash "protocol" herdr-session--snapshot)))
 
+;;; Finishes This Emacs Has Not Seen
+
+;; herdr reports "done" for a finish it holds the operator not to have
+;; watched, and "idle" for one it holds them to have seen.  It writes that
+;; from whether the pane is its own workspace's active tab and whether the
+;; terminal running herdr holds focus, and a workspace of one tab, read
+;; from that terminal, leaves both true for good.  Such a session reports
+;; "done" never, and every reader of the status that exists to catch a
+;; finish catches nothing.
+
+;; So the question can be answered here instead.  A pane that leaves a
+;; running state for a resting one is marked, and stays marked until it
+;; runs again or is read.  Nothing else moves the mark: whether the pane
+;; is on screen is the guess that fails, because in the herdr layout it
+;; almost always is.
+
+;; What is marked is reported as "done" rather than kept beside the
+;; status, so that everything already written against the status agrees
+;; without being told: the mark, its colour, the row fill, the sort order,
+;; and the rollups a space and a tab show.
+
+(defcustom herdr-session-finish-seen-by 'herdr
+  "Who decides whether a finish has been seen.
+`herdr' takes herdr's word for it.  A finish arrives as \"done\" while
+herdr holds it unread and as \"idle\" once it does not, and this Emacs
+passes both on unchanged.
+
+`emacs' answers here instead.  A pane that stops running is reported
+as \"done\" until it runs again or `herdr-session-mark-seen' is called
+on it, whatever herdr made of the same finish.  Worth setting where
+herdr's answer is always \"seen\", which a workspace of one tab read
+from the terminal running herdr always is."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-session
+  :type '(choice (const :tag "herdr" herdr)
+                 (const :tag "This Emacs" emacs)))
+
+(defconst herdr-session-running-statuses '("working" "blocked")
+  "The statuses a pane is doing something in.
+Leaving one of these for anything else is a finish.  Blocked counts as
+running because the agent is still in the middle of its work; what it
+wants is answered by the request sound rather than by a finish.")
+
+(defvar herdr-session--reported (make-hash-table :test #'equal)
+  "The status herdr last reported for each pane, keyed by pane id.
+A pane absent from this has never been seen, and its first status is
+no transition: without that, every agent resting when Emacs connected
+would be marked at once.")
+
+(defvar herdr-session--unread (make-hash-table :test #'equal)
+  "Panes whose finish has not been read, keyed by pane id.
+Only the keys carry meaning.  Empty while
+`herdr-session-finish-seen-by' is `herdr', which is what makes the
+option cost nothing when it is off.")
+
+(defun herdr-session-unread-p (pane-id)
+  "Return non-nil when PANE-ID finished and nobody has read it."
+  (and (gethash pane-id herdr-session--unread) t))
+
+(defun herdr-session-mark-seen (pane-id)
+  "Record that the finish on PANE-ID has been read.
+Call this where the user goes to a pane deliberately.  Returns non-nil
+when there was a mark to clear, so that a caller can redraw only when
+something changed."
+  (when (gethash pane-id herdr-session--unread)
+    (remhash pane-id herdr-session--unread)
+    t))
+
+(defun herdr-session--note-finishes ()
+  "Mark every pane that has just stopped running, and unmark the rest.
+Called with a fresh tree in hand and before the fingerprint is taken,
+so that a mark appearing or going counts as a change worth redrawing."
+  (let ((reported (make-hash-table :test #'equal)))
+    (dolist (agent (herdr-session-agents))
+      (let* ((pane (gethash "pane_id" agent))
+             (status (gethash "agent_status" agent))
+             (previous (gethash pane herdr-session--reported)))
+        (puthash pane status reported)
+        (cond
+          ((not (eq herdr-session-finish-seen-by 'emacs)))
+          ((member status herdr-session-running-statuses)
+           (remhash pane herdr-session--unread))
+          ((member previous herdr-session-running-statuses)
+           (puthash pane t herdr-session--unread)))))
+    ;; A pane herdr no longer reports keeps no mark, or the table grows
+    ;; for as long as Emacs runs and raises whatever reuses its name.
+    (maphash (lambda (pane _)
+               (unless (gethash pane reported)
+                 (remhash pane herdr-session--unread)))
+             (copy-hash-table herdr-session--unread))
+    (setq herdr-session--reported reported)))
+
+(defun herdr-session-status (node)
+  "Return the agent status to show for NODE, which is any tree node.
+This is what herdr reported, except that an idle row covering a pane
+whose finish nobody has read reads \"done\" instead.  Only an idle row
+is raised: one herdr calls working has something running in it, and
+calling that finished would be false as well as quieter."
+  (let ((status (gethash "agent_status" node)))
+    (if (and (equal status "idle") (herdr-session--unread-node-p node))
+        "done"
+      status)))
+
+(defun herdr-session--unread-node-p (node)
+  "Return non-nil when NODE covers a pane whose finish is unread.
+A pane answers for itself, and a tab or a workspace answers for the
+panes inside it, which is the rollup herdr does for the status."
+  (cond
+    ((gethash "pane_id" node)
+     (herdr-session-unread-p (gethash "pane_id" node)))
+    ((gethash "tab_id" node)
+     (herdr-session--unread-under "tab_id" (gethash "tab_id" node)))
+    ((gethash "workspace_id" node)
+     (herdr-session--unread-under "workspace_id"
+                                  (gethash "workspace_id" node)))))
+
+(defun herdr-session--unread-under (key value)
+  "Return non-nil when an agent whose KEY is VALUE has an unread finish."
+  (seq-some (lambda (agent)
+              (and (equal (gethash key agent) value)
+                   (herdr-session-unread-p (gethash "pane_id" agent))))
+            (herdr-session-agents)))
+
 ;;; Spaces
 
 ;; herdr groups workspaces that share a git repository into one space, and
@@ -358,9 +482,7 @@ an ungrouped checkout."
                       :workspaces workspaces
                       :agent-status
                       (herdr-session-status-max
-                       (mapcar (lambda (workspace)
-                                 (gethash "agent_status" workspace))
-                               workspaces)))))
+                       (mapcar #'herdr-session-status workspaces)))))
             (nreverse order))))
 
 (defun herdr-session--space-label (workspaces)

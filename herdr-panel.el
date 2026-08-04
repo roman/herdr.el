@@ -213,6 +213,46 @@ behind its text."
   "Face for the name on the current row."
   :group 'herdr-panel)
 
+(defface herdr-panel-attention-blocked
+  '((((background dark)) :background "#5b3a48" :extend t)
+    (((background light)) :background "#eeb9c8" :extend t)
+    (t :inherit herdr-panel-current))
+  "Face filling the row of an agent that is waiting on the user.
+The mark says as much in a colour, but a mark is one character wide in
+a column of them and is easy to walk past.  This fills the whole row,
+so that finding who wants you is a glance down the column rather than
+a read of it.
+
+Red where `herdr-panel-current' is grey, and further from the panel's
+background than that face is, so that a row wanting the user is the
+louder of the two wherever both are on screen.
+
+Only a background, like `herdr-panel-current', and for the same
+reason: every field on the row keeps the colour it chose.  It fills
+over the current row rather than under it, because which row wants you
+outranks which row you happen to be looking at, and the name on the
+current row stays bold either way.
+
+Where Emacs reports neither a dark nor a light background there is no
+colour that can be relied on, so the row is filled as the current one
+is: still a fill, without the colour."
+  :group 'herdr-panel)
+
+(defface herdr-panel-attention-done
+  '((((background dark)) :background "#2f4a42" :extend t)
+    (((background light)) :background "#9fd4ae" :extend t)
+    (t :inherit herdr-panel-current))
+  "Face filling the row of an agent whose finished work nobody has seen.
+Green against the red of `herdr-panel-attention-blocked', and matched
+to it in weight rather than pitched under it: an agent that has
+stopped is as easy to leave sitting there as one that is asking, and
+the two are told apart by which colour they are, not by how loud.  The
+teal of `herdr-panel-done' sits on this, so the mark stays legible.
+
+See `herdr-panel-attention-blocked' for why a whole row is filled and
+how the fill merges."
+  :group 'herdr-panel)
+
 (defconst herdr-panel-status-faces
   '(("blocked" . herdr-panel-blocked)
     ("done" . herdr-panel-done)
@@ -231,6 +271,21 @@ there is no agent at all."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
   :type '(alist :key-type string :value-type string))
+
+(defcustom herdr-panel-attention-faces
+  '(("blocked" . herdr-panel-attention-blocked)
+    ("done" . herdr-panel-attention-done))
+  "Face filling the whole row of each status that wants the user.
+An entry is (STATUS . FACE).  These are the two states that stay until
+somebody acts on them: an agent waiting on an answer, and work that
+finished with nobody watching.  Every other status colours its mark
+and nothing else, because a panel that lit every interesting row would
+say no more than one that lit none.
+
+Drop an entry to have that status go back to its mark alone."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(alist :key-type string :value-type face))
 
 (defun herdr-panel-status-face (status)
   "Return the face for agent STATUS."
@@ -272,6 +327,20 @@ without having to know what colours its fields chose."
                                (cons face worn)))
           (setq pos next))))))
 
+(defun herdr-panel-attention-face (status)
+  "Return the face filling a row in STATUS, or nil when none fills it.
+Which statuses are filled, and with what, is
+`herdr-panel-attention-faces'."
+  (cdr (assoc status herdr-panel-attention-faces)))
+
+(defun herdr-panel-mark-attention (beg end status)
+  "Fill BEG to END when STATUS is one that wants the user.
+Over whatever is already there, so that the fill outranks the one on
+the current row.  A fill carries no foreground, so every field
+underneath it keeps its own colour, a dimmed row included."
+  (when-let* ((face (herdr-panel-attention-face status)))
+    (herdr-panel--add-face beg end face 'over)))
+
 (defun herdr-panel-status-string (status)
   "Return STATUS's mark, wearing the face for that status."
   (herdr-panel--propertize (herdr-panel-status-symbol status)
@@ -310,16 +379,19 @@ SPEC is a plist:
 An entry is one row however many lines it takes.  It is filled as one
 when it is `current', and moving between rows steps over it whole.
 
-Only the mark is coloured by the status.  herdr leaves the name in one
-colour and lets the mark carry the state, and the mark keeps its
-colour even on a closed entry: an agent that wants the user wants them
-whether or not they happen to have opened it."
+The status colours the mark and nothing else, unless it is named in
+`herdr-panel-attention-faces': those fill the row as well, because a
+mark in a column of marks is easy to miss.  Either way the mark keeps
+its colour on a closed entry, and so does the fill: an agent that
+wants the user wants them whether or not they happen to have opened
+it."
   (let* ((emphasis (plist-get spec :emphasis))
+         (status (plist-get spec :status))
          (detail (plist-get spec :detail))
          (aside (plist-get spec :aside))
          (indent (or (plist-get spec :indent) " "))
          (start (point)))
-    (insert indent (herdr-panel-status-string (plist-get spec :status)) " ")
+    (insert indent (herdr-panel-status-string status) " ")
     ;; Beneath, because a label may already have coloured part of itself:
     ;; an agent names its workspace and the window inside it, and those
     ;; are two different things.
@@ -352,7 +424,9 @@ whether or not they happen to have opened it."
     (when (eq emphasis 'current)
       ;; Beneath, so that the mark and the fields keep their colours and
       ;; only the background comes from here.
-      (herdr-panel--add-face start (point) 'herdr-panel-current 'beneath))))
+      (herdr-panel--add-face start (point) 'herdr-panel-current 'beneath))
+    ;; Last, so that this fill is the one in front of the current row's.
+    (herdr-panel-mark-attention start (point) status)))
 
 (defun herdr-panel-entry-line (spec)
   "Return SPEC drawn as one line, for offering a row in the minibuffer.
@@ -809,6 +883,10 @@ Selecting the terminal is what herdr does when a row is activated, and
 here it also moves the panels' own highlight onto the row just
 visited, because that highlight follows the selected window."
   (require 'herdr-term)
+  ;; Going to a pane on purpose is reading whatever it finished.  Nothing
+  ;; else clears the mark, because a pane sits on screen for as long as
+  ;; anybody works in the layout and clearing on that would clear at once.
+  (herdr-session-mark-seen pane)
   (let ((display-buffer-overriding-action
          '((herdr-panel--display-in-main))))
     (herdr-term-open pane (eq access 'control)))

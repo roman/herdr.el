@@ -246,15 +246,21 @@ large repository and is rarely what the count is wanted for."
   "Insert SPACE, marking the workspace CURRENT wherever it appears.
 A space of one workspace is drawn as that workspace: giving it a group
 to expand would put every ungrouped checkout behind a heading that
-holds a single child."
-  (let ((workspaces (plist-get space :workspaces)))
+holds a single child.
+
+A group carries the loudest status among its members, so a heading is
+filled for attention on the same terms a row is.  Collapsed, that is
+all there is left to say that something inside is waiting."
+  (let ((workspaces (plist-get space :workspaces))
+        (status (plist-get space :agent-status)))
     (if (cdr workspaces)
         (magit-insert-section (herdr-space (plist-get space :key))
-          (magit-insert-heading
-            (concat " " (herdr-panel-status-string
-                         (plist-get space :agent-status))
-                    " " (herdr-panel--propertize (plist-get space :label)
-                                                 'magit-section-heading)))
+          (let ((start (point)))
+            (magit-insert-heading
+              (concat " " (herdr-panel-status-string status)
+                      " " (herdr-panel--propertize (plist-get space :label)
+                                                   'magit-section-heading)))
+            (herdr-panel-mark-attention start (point) status))
           (dolist (workspace workspaces)
             (herdr-spaces--insert-workspace workspace current "   ")))
       (herdr-spaces--insert-workspace (car workspaces) current " "))))
@@ -270,7 +276,7 @@ in a column is the column's business and not the row's."
 
 (defun herdr-spaces--entry (workspace current)
   "Return the row for WORKSPACE, emphasised against the CURRENT one."
-  (list :status (gethash "agent_status" workspace)
+  (list :status (herdr-session-status workspace)
         :emphasis (herdr-spaces--emphasis (gethash "workspace_id" workspace)
                                           current)
         :label (herdr-spaces--name workspace)

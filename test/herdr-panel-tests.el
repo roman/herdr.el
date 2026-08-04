@@ -85,6 +85,22 @@ unbound, whatever this Emacs has loaded, and are restored afterwards."
          (setq-default herdr-term--pane pane)
          (setq-default herdr-term--writable writable)))))
 
+(defun herdr-panel-tests-worn (position)
+  "Return the faces worn at POSITION, as a list however many there are."
+  (ensure-list (get-text-property position 'face)))
+
+(defun herdr-panel-tests-worn-throughout-p (face)
+  "Return non-nil when every character of this buffer wears FACE.
+Both of the properties a panel sets are checked.  A panel is a
+font-lock buffer, and a row carrying `face' alone renders once and
+then loses its colour at the first refontification."
+  (seq-every-p (lambda (position)
+                 (and (memq face (herdr-panel-tests-worn position))
+                      (memq face (ensure-list
+                                  (get-text-property position
+                                                     'font-lock-face)))))
+               (number-sequence (point-min) (1- (point-max)))))
+
 (defmacro herdr-panel-with-buffer (name &rest body)
   "Evaluate BODY in a fresh buffer called NAME, killed afterwards."
   (declare (indent 1) (debug t))
@@ -176,6 +192,71 @@ colours by status."
                    '(:status "working" :label "herdr" :aside "✳"
                      :detail "running tests")))
                  "● herdr ✳  running tests")))
+
+;;; Filling A Row That Wants The User
+
+(ert-deftest herdr-panel-attention-face:follows-the-option ()
+  "Which statuses fill a row, and with what, is the user's to say."
+  (should (eq (herdr-panel-attention-face "blocked")
+              'herdr-panel-attention-blocked))
+  (should (eq (herdr-panel-attention-face "done")
+              'herdr-panel-attention-done))
+  (should-not (herdr-panel-attention-face "working"))
+  (should-not (herdr-panel-attention-face nil))
+  (let ((herdr-panel-attention-faces '(("blocked" . herdr-panel-current))))
+    (should (eq (herdr-panel-attention-face "blocked") 'herdr-panel-current))
+    (should-not (herdr-panel-attention-face "done"))))
+
+(ert-deftest herdr-panel-insert-entry:fills-a-row-that-wants-the-user ()
+  "An agent waiting on an answer fills its row, not only its mark.
+Every character of it, the newline included, so that the fill runs to
+the width of the window rather than stopping where the text does."
+  (with-temp-buffer
+    (herdr-panel-insert-entry '(:status "blocked" :label "herdr"
+                                :detail "waiting for you"))
+    (should (herdr-panel-tests-worn-throughout-p
+             'herdr-panel-attention-blocked))))
+
+(ert-deftest herdr-panel-insert-entry:fills-finished-work-its-own-way ()
+  "Work that ended unwatched fills its row, in a colour of its own.
+Two states want the user for different reasons, and a reader who has
+to open a row to learn which is reading rather than glancing."
+  (with-temp-buffer
+    (herdr-panel-insert-entry '(:status "done" :label "herdr"))
+    (should (herdr-panel-tests-worn-throughout-p
+             'herdr-panel-attention-done))
+    (should-not (memq 'herdr-panel-attention-blocked
+                      (herdr-panel-tests-worn (point-min))))))
+
+(ert-deftest herdr-panel-insert-entry:leaves-a-quiet-row-unfilled ()
+  "A status nobody has to act on fills nothing.
+A panel that lit every row would say no more than one that lit none."
+  (with-temp-buffer
+    (herdr-panel-insert-entry '(:status "working" :label "herdr"))
+    (let ((worn (herdr-panel-tests-worn (point-min))))
+      (should-not (memq 'herdr-panel-attention-blocked worn))
+      (should-not (memq 'herdr-panel-attention-done worn)))))
+
+(ert-deftest herdr-panel-insert-entry:fills-over-the-current-row ()
+  "Which row wants you outranks which row you are looking at.
+Both are backgrounds, so the one in front is the one that shows, and
+the name on the current row is bold either way."
+  (with-temp-buffer
+    (herdr-panel-insert-entry '(:status "blocked" :emphasis current
+                                :label "herdr"))
+    (let ((worn (herdr-panel-tests-worn (point-min))))
+      (should (memq 'herdr-panel-current worn))
+      (should (< (seq-position worn 'herdr-panel-attention-blocked)
+                 (seq-position worn 'herdr-panel-current))))))
+
+(ert-deftest herdr-panel-insert-entry:fills-a-row-nobody-has-opened ()
+  "An agent that wants you wants you whether or not you opened it.
+A closed row is dimmed as a whole, and the fill is what survives that:
+the row herdr is waiting on is the one a reader must not walk past."
+  (with-temp-buffer
+    (herdr-panel-insert-entry '(:status "blocked" :emphasis closed
+                                :label "herdr"))
+    (should (herdr-panel-tests-worn-throughout-p 'herdr-panel-attention-blocked))))
 
 ;;; Telling Two Rows Apart
 

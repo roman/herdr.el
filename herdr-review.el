@@ -236,7 +236,7 @@ A review is an agent of kind `herdr-review-agent', which is what the
 herdr-review script reports each one as."
   (seq-sort-by (lambda (review)
                  (herdr-session-status-priority
-                  (gethash "agent_status" review)))
+                  (herdr-session-status review)))
                #'>
                (seq-filter (lambda (agent)
                              (equal (gethash "agent" agent)
@@ -268,7 +268,7 @@ is this file's business."
 The workspace names the row, because one review per workspace makes
 the workspace the thing being reviewed.  What is under review goes
 beneath it, as the script counted it when the review opened."
-  (list :status (gethash "agent_status" review)
+  (list :status (herdr-session-status review)
         :emphasis (herdr-panel-emphasis (gethash "pane_id" review) current)
         :label (herdr-review--label review)
         :aside (herdr-panel-text herdr-review-icon 'herdr-review-icon)
