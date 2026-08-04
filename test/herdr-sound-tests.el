@@ -47,6 +47,7 @@ a tree it has never seen before."
   (declare (indent 0) (debug t))
   `(let ((herdr-sound-test-played nil)
          (herdr-sound-enabled t)
+         (herdr-sound-finish 'unseen)
          (herdr-sound--statuses (make-hash-table :test #'equal)))
      (cl-letf (((symbol-function 'herdr-sound--play)
                 (lambda (sound) (push sound herdr-sound-test-played))))
@@ -132,6 +133,51 @@ agents unblocking at once would otherwise start twenty players."
     (should (equal (sort (copy-sequence herdr-sound-test-played)
                          #'string<)
                    '(done request)))))
+
+;;; Which Finishes
+
+(ert-deftest herdr-sound--note-change:announces-every-finish-when-asked ()
+  "`any' hears the finish herdr decided against announcing.
+herdr writes `seen' from whether the pane is its workspace's active
+tab and whether the terminal running herdr holds focus.  A setup that
+leaves both true reports every finish as \"idle\" and reaches \"done\"
+never, which leaves the default hearing nothing at all."
+  (herdr-sound-with-recorder
+    (let ((herdr-sound-finish 'any))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "idle")))
+      (should (equal herdr-sound-test-played '(done))))))
+
+(ert-deftest herdr-sound--note-change:announces-a-finish-in-view-when-asked ()
+  "`any' stops asking whether the pane is on screen here.
+The two guards go together.  A reader who wants every finish announced
+is not served by one that is dropped for being visible, and the pane
+is visible for most of the time anybody works in the layout."
+  (herdr-sound-with-recorder
+    (let ((buffer (generate-new-buffer "*herdr:w1:p1*"))
+          (herdr-sound-finish 'any))
+      (unwind-protect
+          (save-window-excursion
+            (set-window-buffer (selected-window) buffer)
+            (with-current-buffer buffer (setq-local herdr-term--pane "w1:p1"))
+            (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+            (herdr-sound-test-observe '(("w1:p1" "claude" "idle")))
+            (should (equal herdr-sound-test-played '(done))))
+        (kill-buffer buffer)))))
+
+(ert-deftest herdr-sound--note-change:says-nothing-when-a-finish-is-read ()
+  "Looking at finished work is not more finished work.
+herdr turns a \"done\" pane \"idle\" the moment the operator looks at
+it, so a sound on that edge would announce the acknowledgement.  The
+same goes for a pane whose state herdr lost track of and recovered."
+  (herdr-sound-with-recorder
+    (let ((herdr-sound-finish 'any))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "done")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "idle")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "unknown")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "idle")))
+      (should (equal herdr-sound-test-played '(done))))))
 
 ;;; Who is Looking
 

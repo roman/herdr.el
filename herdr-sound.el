@@ -46,6 +46,15 @@
 ;; there and not here is heard.  That is the intent — the question worth
 ;; asking from Emacs is whether you can see the pane from Emacs.
 
+;; Both of those readings trust herdr to report "done" at all, and there
+;; are setups where it never does.  It writes `seen' from whether the pane
+;; is its own workspace's active tab and whether the terminal running herdr
+;; holds focus; a workspace of one tab, read from that terminal, leaves
+;; both true for good and reports every finish as "idle".  Nothing here can
+;; tell that apart from a finish herdr chose to silence, so it is a setting
+;; rather than a guess: `herdr-sound-finish' set to `any' hears every
+;; finish and stops asking who is looking.
+
 ;; The transitions are read out of the session tree rather than off the
 ;; wire.  herdr does have a `pane.agent_status_changed' event, but it is
 ;; subscribed one pane at a time, and this needs every pane; `pane.updated'
@@ -80,6 +89,28 @@ backlog of what it missed.  Turn the mode off to stop watching."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-sound
   :type 'boolean)
+
+(defcustom herdr-sound-finish 'unseen
+  "Which finishes are announced.
+`unseen' announces what herdr reports as \"done\" and nothing else,
+and drops even that when the pane is on screen in Emacs.  This is
+herdr's own division of labour, and it is right wherever herdr's
+answer can be trusted.
+
+`any' announces every finish, \"idle\" included, and stops asking
+whether the pane is on screen.  Worth having where herdr's answer is
+always \"seen\": it writes `seen' from whether the pane is its own
+workspace's active tab and whether the terminal running herdr holds
+focus, and a single-tab workspace read from that terminal leaves both
+true forever.  Such a setup reaches \"done\" never and hears nothing
+under `unseen'.
+
+Neither setting touches a request.  An agent that starts waiting is
+announced under both, because herdr never suppresses that one."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-sound
+  :type '(choice (const :tag "Only a finish herdr calls unseen" unseen)
+                 (const :tag "Every finish" any)))
 
 (defcustom herdr-sound-request-file nil
   "Sound file for an agent that started waiting, or nil for the bell.
@@ -180,8 +211,7 @@ batch is as much as anybody can tell apart."
                    (not (memq sound sounds))
                    herdr-sound-enabled
                    (herdr-sound--heard-p (gethash "agent" agent))
-                   (or (eq sound 'request)
-                       (not (herdr-sound--watched-p pane))))
+                   (herdr-sound--wanted-p sound pane))
           (push sound sounds))))
     (setq herdr-sound--statuses statuses)
     (mapc #'herdr-sound--play (nreverse sounds))))
@@ -192,11 +222,31 @@ Becoming blocked asks for attention.  Reaching \"done\" reports work
 that finished, and reaching \"idle\" reports nothing: the two are one
 state on herdr's side, split by whether it holds the operator to have
 watched the work end, and \"idle\" is the half it has already decided
-against announcing."
+against announcing.
+
+`herdr-sound-finish' set to `any' hears that half as well, but only
+from a state that was still running.  herdr turns a \"done\" pane
+\"idle\" as soon as the operator looks at it, and a sound on that edge
+would announce the acknowledgement rather than the work."
   (cond
     ((equal previous status) nil)
     ((equal status "blocked") 'request)
-    ((equal status "done") 'done)))
+    ((equal status "done") 'done)
+    ((and (equal status "idle")
+          (eq herdr-sound-finish 'any)
+          (member previous '("working" "blocked")))
+     'done)))
+
+(defun herdr-sound--wanted-p (sound pane)
+  "Return non-nil when SOUND is worth playing for PANE.
+A request always is.  A finish is dropped when the pane is on screen
+here, unless `herdr-sound-finish' is `any': asking for every finish
+and then dropping the visible ones would leave most of them unheard,
+because a pane is on screen for as long as anybody is working in the
+layout."
+  (or (eq sound 'request)
+      (eq herdr-sound-finish 'any)
+      (not (herdr-sound--watched-p pane))))
 
 (defun herdr-sound--heard-p (kind)
   "Return non-nil when an agent of KIND is allowed to sound."
