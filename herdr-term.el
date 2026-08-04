@@ -196,39 +196,50 @@ which makes it the record of whether that connection ever synced.")
   "<wheel-up>" #'herdr-term-scroll-up
   "<wheel-down>" #'herdr-term-scroll-down)
 
-(declare-function evil-define-key* "evil-core"
-                  (state keymap key def &rest bindings))
+(declare-function evil-define-minor-mode-key "evil-core"
+                  (state mode key def &rest bindings))
 (declare-function ghostel--send-event "ghostel" ())
 
 (defconst herdr-term-evil-passthrough-keys
-  '("DEL" "<backspace>" "C-a" "C-d" "C-e" "C-k" "C-n" "C-p"
-    "C-q" "C-r" "C-t" "C-v" "C-w")
+  '("<escape>" "DEL" "<backspace>" "C-a" "C-d" "C-e" "C-k" "C-n"
+    "C-p" "C-q" "C-r" "C-t" "C-v" "C-w")
   "Keys insert state must hand to the program rather than act on.
 evil binds these for editing a buffer, and its state maps outrank both
 the major and the minor mode maps, so ghostel never sees them: in a
 terminal that makes backspace do nothing and takes the shell's own
-line editing away.  `C-o' and `C-z' are deliberately left to evil, as
-the way back out of a terminal that has the keyboard.")
+line editing away.  Escape is here for the same reason and not to
+leave insert state: a pane always holds a program that reads it, an
+agent or an editor or a pager.  `C-o' and `C-z' are deliberately left
+to evil, as the way back out of a terminal that has the keyboard.")
 
-;; Only in normal state: insert state is where keys reach the program, so
-;; binding a motion there would swallow it.  These are state bindings on
-;; the minor mode's own map rather than on `ghostel-mode-map', so they
-;; disappear with the mode and cannot outlive a herdr buffer.
+;; Registered against the minor mode rather than defined on its keymap,
+;; because evil ranks a minor mode's keymaps above the auxiliary ones
+;; `evil-define-key*' builds, and a herdr buffer is very likely to have
+;; evil-ghostel in it.  That package claims escape and the control keys
+;; on auxiliary maps of its own, and routes escape to the terminal only
+;; while ghostel reports an alternate screen — which a herdr pane never
+;; does, because the frames herdr sends have the mode flattened out of
+;; them.  Ranking above it is what makes the routing the same in every
+;; pane.  Either way the bindings live and die with the mode, so they
+;; cannot outlast a herdr buffer.
+;;
+;; The motions are normal state only: insert state is where keys reach
+;; the program, so binding one there would swallow it.
 (with-eval-after-load 'evil
-  (apply #'evil-define-key* 'insert herdr-term-command-mode-map
+  (apply #'evil-define-minor-mode-key 'insert 'herdr-term-command-mode
          (mapcan (lambda (key) (list (kbd key) #'ghostel--send-event))
                  herdr-term-evil-passthrough-keys))
-  (evil-define-key* 'normal herdr-term-command-mode-map
-                    "j" #'herdr-term-line-down
-                    "k" #'herdr-term-line-up
-                    (kbd "C-e") #'herdr-term-scroll-down
-                    (kbd "C-y") #'herdr-term-scroll-up
-                    (kbd "C-f") #'herdr-term-scroll-page-down
-                    (kbd "C-b") #'herdr-term-scroll-page-up
-                    (kbd "C-d") #'herdr-term-scroll-half-page-down
-                    (kbd "C-u") #'herdr-term-scroll-half-page-up
-                    "gg" #'herdr-term-scroll-to-top
-                    "G" #'herdr-term-scroll-to-bottom))
+  (evil-define-minor-mode-key 'normal 'herdr-term-command-mode
+                              "j" #'herdr-term-line-down
+                              "k" #'herdr-term-line-up
+                              (kbd "C-e") #'herdr-term-scroll-down
+                              (kbd "C-y") #'herdr-term-scroll-up
+                              (kbd "C-f") #'herdr-term-scroll-page-down
+                              (kbd "C-b") #'herdr-term-scroll-page-up
+                              (kbd "C-d") #'herdr-term-scroll-half-page-down
+                              (kbd "C-u") #'herdr-term-scroll-half-page-up
+                              "gg" #'herdr-term-scroll-to-top
+                              "G" #'herdr-term-scroll-to-bottom))
 
 ;;; Commands
 
@@ -712,6 +723,7 @@ grid that had drifted from herdr's would stay wrong.  Recreating it
 guarantees parity."
   (let ((rows (max 1 (or rows herdr-term--rows 24)))
         (cols (max 1 (or cols herdr-term--cols 80))))
+    (herdr-term--return-to-semi-char)
     ;; `ghostel--init-buffer' refuses to run while `ghostel--process' holds
     ;; a live process, and on a writable buffer that slot is where the input
     ;; bridge lives.  Shadow the slot rather than retiring the bridge, whose
@@ -727,6 +739,18 @@ guarantees parity."
           herdr-term--cols cols)
     (when herdr-term--writable
       (herdr-term--ensure-input-bridge))))
+
+(defun herdr-term--return-to-semi-char ()
+  "Leave whichever input mode the buffer is in, ahead of a grid rebuild.
+Rebuilding sets `ghostel--input-mode' to `semi-char' but runs no
+teardown, so a copy, Emacs, char or line mode leaves its keymap, its
+read-only barrier and its cursor style behind.  The buffer then claims
+to take terminal input while its keys still run the old map, and it
+stays that way: `ghostel-semi-char-mode' returns early on the variable
+that already reads `semi-char'.  Switching first is what keeps the two
+in step."
+  (unless (eq ghostel--input-mode 'semi-char)
+    (ghostel-semi-char-mode)))
 
 (defun herdr-term--paint (bytes)
   "Feed BYTES to this buffer's ghostel terminal and repaint it.

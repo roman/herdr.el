@@ -97,6 +97,12 @@ clean:
 # `emacs -Q' plus `package-initialize' finds a Nix, site-lisp or ELPA
 # install without loading user init, which keeps the build reproducible.
 # Set EMACS_LOAD_PATH when a dependency lives somewhere neither finds.
+#
+# evil and evil-ghostel are integrations rather than dependencies, so a
+# checkout without them still builds; the tests that need them skip.
+required := "ghostel magit-section"
+optional := "evil evil-ghostel"
+
 [private]
 _load-path:
     #!/usr/bin/env bash
@@ -105,11 +111,12 @@ _load-path:
         echo "-L . ${EMACS_LOAD_PATH}"
         exit 0
     fi
-    echo "-L . $({{ emacs }} -Q --batch -f package-initialize --eval '
-      (dolist (lib (list "ghostel" "magit-section"))
-        (let ((file (locate-library lib)))
-          (unless file
-            (error "Cannot locate %s; set EMACS_LOAD_PATH" lib))
-          (princ "-L ")
-          (princ (directory-file-name (file-name-directory file)))
-          (princ " ")))')"
+    echo "-L . $(REQUIRED="{{ required }}" {{ emacs }} -Q --batch \
+      -f package-initialize --eval '
+      (dolist (lib command-line-args-left)
+        (if-let* ((file (locate-library lib)))
+            (princ (format "-L %s "
+                           (directory-file-name (file-name-directory file))))
+          (when (member lib (split-string (getenv "REQUIRED")))
+            (error "Cannot locate %s; set EMACS_LOAD_PATH" lib))))' \
+      {{ required }} {{ optional }})"

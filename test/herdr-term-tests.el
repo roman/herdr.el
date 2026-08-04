@@ -76,6 +76,11 @@ The buffer of a test that fails is left behind for inspection."
                        "Buffer %s already has a running ghostel process"
                        (buffer-name)))
                     (setq ghostel--process nil)
+                    ;; Reproduced because it is the trap: the real one
+                    ;; claims the buffer takes terminal input again
+                    ;; without running the teardown that would make it
+                    ;; true.
+                    (setq ghostel--input-mode 'semi-char)
                     (push (cons rows cols) herdr-term-test-resets)))
                  ((symbol-function 'ghostel--set-size-with-cell-dims)
                   (lambda (_term rows cols)
@@ -266,6 +271,28 @@ flushed yet are keystrokes the user already typed."
     (should (eql herdr-term--last-seq 1))
     (should (eql herdr-term-test-streams 0))
     (should (eq ghostel--process herdr-term--process))))
+
+(ert-deftest herdr-term--reset-term:restores-the-terminal-keymap ()
+  "Every input mode is left behind before the grid is rebuilt.
+A rebuild claims the buffer takes terminal input again without running
+the teardown for the mode it leaves, so the keymap, the read-only
+barrier and the cursor of a copy, Emacs or char mode survive it.  The
+buffer is then wedged for good, its keys running a map that no longer
+matches what it says it is, because `ghostel-semi-char-mode' returns
+early on the variable the rebuild already set."
+  (herdr-term-with-test-buffer
+    (ghostel-mode)
+    (dolist (enter (list #'ghostel-copy-mode #'ghostel-emacs-mode
+                         #'ghostel-char-mode))
+      (funcall enter)
+      (should (not (eq (current-local-map) ghostel-semi-char-mode-map)))
+      (herdr-term--reset-term 24 80)
+      (should (eq (current-local-map) ghostel-semi-char-mode-map))
+      (should (eq ghostel--input-mode 'semi-char))
+      ;; Char mode's own override outranks `herdr-term-command-mode-map'
+      ;; through `emulation-mode-map-alists', so a stale one swallows the
+      ;; resync that is the last way back.
+      (should (not ghostel--char-mode-override-active)))))
 
 (ert-deftest herdr-term--reset-term:disowns-local-resize ()
   "Herdr owns the grid, so ghostel's window-driven resize is removed.
@@ -842,6 +869,61 @@ fitted."
       (herdr-term--note-resize (selected-window))
       (should (timerp herdr-term--resize-timer))
       (herdr-term--cancel-resize))))
+
+;;; Evil Keys
+
+(declare-function evil-local-mode "evil-core" (&optional arg))
+(declare-function evil-change-state "evil-core" (state &optional message))
+(declare-function evil-ghostel-mode "evil-ghostel" (&optional arg))
+
+(defmacro herdr-term-with-evil-buffer (state &rest body)
+  "Evaluate BODY in a herdr terminal buffer that evil is in STATE in.
+Skip the test when evil is absent, which it may be: it is an
+integration rather than a dependency of this package.  evil-ghostel is
+loaded with it whenever it is installed, because a herdr buffer very
+likely has it and it competes for the same keys."
+  (declare (indent 1) (debug t))
+  `(progn
+     (skip-unless (require 'evil nil t))
+     (require 'evil-ghostel nil t)
+     (with-temp-buffer
+       (evil-local-mode 1)
+       (when (fboundp 'evil-ghostel-mode)
+         (evil-ghostel-mode 1))
+       (herdr-term-command-mode 1)
+       (evil-change-state ,state)
+       ,@body)))
+
+(ert-deftest herdr-term-command-mode:sends-escape-to-the-pane ()
+  "Escape reaches the program in the pane rather than leaving insert.
+evil spends it on `evil-normal-state', and evil-ghostel hands it over
+only while ghostel reports an alternate screen, which a herdr pane
+never does.  Outranking both is the whole point of binding it against
+the minor mode."
+  (herdr-term-with-evil-buffer 'insert
+    (should (eq (key-binding (kbd "<escape>")) #'ghostel--send-event))))
+
+(ert-deftest herdr-term-command-mode:keeps-normal-state-escape ()
+  "Normal state has no program to feed, so escape stays evil's."
+  (herdr-term-with-evil-buffer 'normal
+    (should-not (eq (key-binding (kbd "<escape>")) #'ghostel--send-event))))
+
+(ert-deftest herdr-term-command-mode:passes-editing-keys-through ()
+  "Backspace and the shell's line editing keys reach the program.
+evil and evil-ghostel both bind these in insert state, so a binding
+that loses the rank contest takes the shell's line editing away."
+  (herdr-term-with-evil-buffer 'insert
+    (dolist (key herdr-term-evil-passthrough-keys)
+      (should (eq (key-binding (kbd key)) #'ghostel--send-event)))))
+
+(ert-deftest herdr-term-command-mode:scrolls-the-pane-in-normal-state ()
+  "Normal state motions move the pane's viewport, not point.
+The buffer only ever holds the viewport, so evil's own motions have
+nothing to move onto."
+  (herdr-term-with-evil-buffer 'normal
+    (should (eq (key-binding "j") #'herdr-term-line-down))
+    (should (eq (key-binding (kbd "C-u")) #'herdr-term-scroll-half-page-up))
+    (should (eq (key-binding "G") #'herdr-term-scroll-to-bottom))))
 
 ;;; _
 (provide 'herdr-term-tests)

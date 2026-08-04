@@ -253,6 +253,15 @@ catch this. Two things are required, both now implemented in `herdr-term.el`:
 - A full frame (and every resync) must **reset the ghostel terminal**
   (`ghostel--init-buffer`), not just write bytes onto the existing grid — a reused
   grid keeps the drift. A fresh reset renders identically to a fresh open.
+- `ghostel--init-buffer` sets `ghostel--input-mode` to `semi-char` and runs no
+  teardown for the mode it leaves (ghostel 0.48). Reset a buffer that is in copy,
+  Emacs, char or line mode and the keymap, the read-only barrier and the cursor of
+  that mode survive; the buffer then claims to take terminal input while its keys
+  run the old map, and `ghostel-semi-char-mode` will not repair it because it
+  returns early on the variable the reset already set. **Leave the input mode
+  before resetting.** A herdr buffer meets this whenever a resync follows a mouse
+  click, an `isearch` or a minibuffer command, each of which can enter copy mode
+  on its own.
 - Because nothing signals the divergence, recovery is **resync = reconnect**
   (fresh full frame). It fires automatically on a seq gap or stream exit, and
   manually on `C-c C-l`. Intentional teardowns must detach the process sentinel
