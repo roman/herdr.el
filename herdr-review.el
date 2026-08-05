@@ -62,14 +62,18 @@
   :group 'herdr-panel
   :link '(url-link "https://github.com/roman/herdr.el"))
 
-(defcustom herdr-review-program "herdr-review"
+(defcustom herdr-review-program "herdr-meat-review"
   "The script that starts and ends a review.
 Named rather than reimplemented so that a review begun from Emacs, from
 a shell, or by a coding agent is the same review, and so that which
 review tool actually runs is that script's business rather than this
-file's.  It ships apart from herdr, in the herdr-review project; put its
-full path here when that project's `bin' directory is not on the
-variable `exec-path'."
+file's.  It ships apart from herdr, in the herdr-meat-review project;
+put its full path here when that project's `bin' directory is not on
+the variable `exec-path'.
+
+The names differ on purpose.  This library is called for the file that
+holds it, as Emacs Lisp requires; the script is called for the kind of
+reviewer it waits on, which is a person rather than an agent."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-review
   :type 'string)

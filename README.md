@@ -23,8 +23,8 @@ This extension will require:
   libghostty-vt, the same VT engine herdr vendors on the server, so colour, styling, and
   hyperlinks survive the trip with no fidelity loss.
 
-The Reviews panel additionally wants the `herdr-review` script, which ships in the
-[herdr-review](https://github.com/roman/herdr-review) project rather than here. Everything else works without it.
+The Reviews panel additionally wants the `herdr-meat-review` script, which ships in the
+[herdr-meat-review](https://github.com/roman/herdr-meat-review) project rather than here. Everything else works without it.
 
 Sounds want nothing, until you name a file for one — then they want a player to hand it to.
 The bell needs neither.
@@ -170,7 +170,9 @@ the session starts itself if nothing has started it yet.
 ### (1) The Reviews panel is opt in
 
 `herdr-review` is not loaded with the rest of herdr, because it needs a tool
-herdr does not: the `herdr-review` script, which starts and ends a review.
+herdr does not: the `herdr-meat-review` script, which starts and ends a review.
+The library keeps the shorter name because Emacs Lisp names a library after
+the file that holds it; the script says which kind of reviewer it waits on.
 Requiring it is what puts the Reviews panel in the column and takes review
 rows out of the Agents panel, so that a review appears in exactly one place.
 
