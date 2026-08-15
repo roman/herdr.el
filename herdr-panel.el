@@ -57,29 +57,39 @@
 ;; light one.  Everything here is a face, so a theme that disagrees can
 ;; say so without patching the panels.
 
+;; The four status marks depart from Mocha, and only on a dark background.
+;; Mocha's are pastels: light and barely saturated, which is what they are
+;; for behind a wall of code.  A mark is one glyph wide, three of the
+;; statuses draw the same glyph, and colour is the whole of what tells them
+;; apart — and against a black background the pastels lose the little
+;; saturation they had and read as three shades of pale.  So each mark
+;; keeps Mocha's hue and takes as much of it as the terminal will give.
+;; Every field that is text rather than a mark stays pastel, which leaves
+;; the marks the loudest thing in the column: they are what a reader scans.
+
 (defface herdr-panel-blocked
-  '((((background dark)) :foreground "#f38ba8")
+  '((((background dark)) :foreground "#ff3b47")
     (((background light)) :foreground "#d20f39")
     (t :inherit error))
   "Face for the mark of an agent waiting on the user."
   :group 'herdr-panel)
 
 (defface herdr-panel-working
-  '((((background dark)) :foreground "#f9e2af")
+  '((((background dark)) :foreground "#ffcc00")
     (((background light)) :foreground "#df8e1d")
     (t :inherit warning))
   "Face for the mark of an agent that is working."
   :group 'herdr-panel)
 
 (defface herdr-panel-done
-  '((((background dark)) :foreground "#94e2d5")
+  '((((background dark)) :foreground "#00e5c0")
     (((background light)) :foreground "#179299")
     (t :inherit success))
   "Face for the mark of an agent whose finished work nobody has seen."
   :group 'herdr-panel)
 
 (defface herdr-panel-idle
-  '((((background dark)) :foreground "#a6e3a1")
+  '((((background dark)) :foreground "#2fe86b")
     (((background light)) :foreground "#40a043")
     (t :inherit success))
   "Face for the mark of an agent with nothing to report."
