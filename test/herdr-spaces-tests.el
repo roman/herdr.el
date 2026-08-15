@@ -151,15 +151,18 @@ behind a heading that looked quiet."
             :panes
             (vector (herdr-spaces-tests--pane "w1:p1" "w1")
                     (herdr-spaces-tests--pane "w2:p1" "w2")))
-    (with-temp-buffer
-      (magit-insert-section (herdr-spaces-tests-root)
-        (herdr-spaces--insert (car (herdr-session-spaces)) nil))
-      (should (memq 'herdr-panel-attention-blocked
-                    (herdr-spaces-tests--fill-at "repo-a")))
-      (should (memq 'herdr-panel-attention-blocked
-                    (herdr-spaces-tests--fill-at "fix")))
-      (should-not (memq 'herdr-panel-attention-blocked
-                        (herdr-spaces-tests--fill-at "main"))))))
+    (herdr-panel-tests-with-pulses
+      (herdr-panel--pulse-begin "repo-a")
+      (herdr-panel--pulse-begin "w2")
+      (with-temp-buffer
+        (magit-insert-section (herdr-spaces-tests-root)
+          (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+        (should (memq 'herdr-panel-attention-blocked
+                      (herdr-spaces-tests--fill-at "repo-a")))
+        (should (memq 'herdr-panel-attention-blocked
+                      (herdr-spaces-tests--fill-at "fix")))
+        (should-not (memq 'herdr-panel-attention-blocked
+                          (herdr-spaces-tests--fill-at "main")))))))
 
 (ert-deftest herdr-spaces--insert:leaves-a-quiet-group-unfilled ()
   "A space with nothing waiting in it draws as it always did."
@@ -172,11 +175,13 @@ behind a heading that looked quiet."
             :panes
             (vector (herdr-spaces-tests--pane "w1:p1" "w1")
                     (herdr-spaces-tests--pane "w2:p1" "w2")))
-    (with-temp-buffer
-      (magit-insert-section (herdr-spaces-tests-root)
-        (herdr-spaces--insert (car (herdr-session-spaces)) nil))
-      (should-not (memq 'herdr-panel-attention-blocked
-                        (herdr-spaces-tests--fill-at "repo-a"))))))
+    (herdr-panel-tests-with-pulses
+      (herdr-panel--pulse-begin "repo-a")
+      (with-temp-buffer
+        (magit-insert-section (herdr-spaces-tests-root)
+          (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+        (should-not (memq 'herdr-panel-attention-blocked
+                          (herdr-spaces-tests--fill-at "repo-a")))))))
 
 ;;; _
 (provide 'herdr-spaces-tests)

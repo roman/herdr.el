@@ -163,6 +163,8 @@ the session starts itself if nothing has started it yet.
         ("codex" . "◆")))
 (setq herdr-api-socket "~/.config/herdr/sessions/work/herdr.sock") ;; (6)
 (setq herdr-spaces-git nil)                    ;; (7)
+(setq herdr-panel-attention-pulses 3)          ;; (8)
+(setq herdr-panel-attention-pulse-interval 0.4)
 
 (keymap-global-set "C-c h" #'herdr-ui)
 ```
@@ -268,6 +270,20 @@ herdr computes the branch and dirty state it draws on a space but puts
 neither on the wire, so herdr.el asks git itself, cached for
 `herdr-spaces-git-ttl` seconds. Set `herdr-spaces-git` to nil if you would
 rather it did not.
+
+### (8) A row wanting you flashes rather than staying lit
+
+An agent that starts waiting for an answer, or that finishes work nobody
+watched, fills its whole row with colour — red for the first, green for the
+second — because a mark one character wide in a column of marks is easy to
+walk past. The fill flashes `herdr-panel-attention-pulses` times, each phase
+lasting `herdr-panel-attention-pulse-interval` seconds, and then goes. What
+the agent wants is left to its mark, which keeps the colour for as long as
+the status does.
+
+Set `herdr-panel-attention-pulses` to 0 to have the panels say all of this
+with their marks alone, and `herdr-panel-attention-faces` to choose which
+statuses flash and in what colour.
 
 ## Keys
 

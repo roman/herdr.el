@@ -227,11 +227,12 @@ behind its text."
   '((((background dark)) :background "#5b3a48" :extend t)
     (((background light)) :background "#eeb9c8" :extend t)
     (t :inherit herdr-panel-current))
-  "Face filling the row of an agent that is waiting on the user.
-The mark says as much in a colour, but a mark is one character wide in
-a column of them and is easy to walk past.  This fills the whole row,
-so that finding who wants you is a glance down the column rather than
-a read of it.
+  "Face flashing the row of an agent that has begun waiting on the user.
+The mark says that the agent is waiting, but a mark is one character
+wide in a column of them and is easy to walk past.  This fills the
+whole row while the row pulses, so that an agent that starts waiting
+while you are reading something else catches the corner of your eye.
+The fill goes when the pulse ends; see `herdr-panel-attention-pulses'.
 
 Red where `herdr-panel-current' is grey, and further from the panel's
 background than that face is, so that a row wanting the user is the
@@ -252,15 +253,15 @@ is: still a fill, without the colour."
   '((((background dark)) :background "#2f4a42" :extend t)
     (((background light)) :background "#9fd4ae" :extend t)
     (t :inherit herdr-panel-current))
-  "Face filling the row of an agent whose finished work nobody has seen.
+  "Face flashing the row of an agent that has just finished unwatched.
 Green against the red of `herdr-panel-attention-blocked', and matched
 to it in weight rather than pitched under it: an agent that has
 stopped is as easy to leave sitting there as one that is asking, and
 the two are told apart by which colour they are, not by how loud.  The
 teal of `herdr-panel-done' sits on this, so the mark stays legible.
 
-See `herdr-panel-attention-blocked' for why a whole row is filled and
-how the fill merges."
+See `herdr-panel-attention-blocked' for why a whole row is filled, how
+long for, and how the fill merges."
   :group 'herdr-panel)
 
 (defface herdr-panel-point
@@ -301,12 +302,16 @@ there is no agent at all."
 (defcustom herdr-panel-attention-faces
   '(("blocked" . herdr-panel-attention-blocked)
     ("done" . herdr-panel-attention-done))
-  "Face filling the whole row of each status that wants the user.
+  "Face flashing the whole row of each status that wants the user.
 An entry is (STATUS . FACE).  These are the two states that stay until
 somebody acts on them: an agent waiting on an answer, and work that
 finished with nobody watching.  Every other status colours its mark
 and nothing else, because a panel that lit every interesting row would
 say no more than one that lit none.
+
+The fill arrives with the status and goes a moment later, which is what
+makes it a flash rather than a colour the row keeps; see
+`herdr-panel-attention-pulses'.
 
 Drop an entry to have that status go back to its mark alone."
   :package-version '(herdr . "0.1.0")
@@ -359,12 +364,17 @@ Which statuses are filled, and with what, is
 `herdr-panel-attention-faces'."
   (cdr (assoc status herdr-panel-attention-faces)))
 
-(defun herdr-panel-mark-attention (beg end status)
-  "Fill BEG to END when STATUS is one that wants the user.
+(defun herdr-panel-mark-attention (beg end spec)
+  "Fill BEG to END while the row SPEC describes is pulsing for the user.
+SPEC is a row as `herdr-panel-insert-entry' takes it, of which
+`:status' chooses the colour of the fill and `:id' says which row is
+pulsing.
+
 Over whatever is already there, so that the fill outranks the one on
 the current row.  A fill carries no foreground, so every field
 underneath it keeps its own colour, a dimmed row included."
-  (when-let* ((face (herdr-panel-attention-face status)))
+  (when-let* (((herdr-panel-attention-pulsing-p (plist-get spec :id)))
+              (face (herdr-panel-attention-face (plist-get spec :status))))
     (herdr-panel--add-face beg end face 'over)))
 
 (defun herdr-panel-status-string (status)
@@ -395,6 +405,9 @@ SPEC is a plist:
   `:emphasis'  `current' for the pane the selected window shows,
                `open' for one another buffer mirrors, `closed' for one
                with no buffer here
+  `:id'        what the row stands for, as herdr names it: a pane, a
+               workspace or a space.  This is the identity a pulse
+               follows, so a row given none never flashes
   `:label'     the name, shown beside the mark
   `:aside'     more of the first line, shown after the name
   `:detail'    what follows on further lines, indented under the
@@ -405,12 +418,11 @@ SPEC is a plist:
 An entry is one row however many lines it takes.  It is filled as one
 when it is `current', and moving between rows steps over it whole.
 
-The status colours the mark and nothing else, unless it is named in
-`herdr-panel-attention-faces': those fill the row as well, because a
-mark in a column of marks is easy to miss.  Either way the mark keeps
-its colour on a closed entry, and so does the fill: an agent that
-wants the user wants them whether or not they happen to have opened
-it."
+The status colours the mark, and it keeps that colour on a closed
+entry: an agent that wants the user wants them whether or not they
+happen to have opened it.  A status named in
+`herdr-panel-attention-faces' fills the whole row as well, for the few
+moments it pulses."
   (let* ((emphasis (plist-get spec :emphasis))
          (status (plist-get spec :status))
          (detail (plist-get spec :detail))
@@ -452,7 +464,7 @@ it."
       ;; only the background comes from here.
       (herdr-panel--add-face start (point) 'herdr-panel-current 'beneath))
     ;; Last, so that this fill is the one in front of the current row's.
-    (herdr-panel-mark-attention start (point) status)))
+    (herdr-panel-mark-attention start (point) spec)))
 
 (defun herdr-panel-entry-line (spec)
   "Return SPEC drawn as one line, for offering a row in the minibuffer.
@@ -501,6 +513,149 @@ mirror is the one holding it."
   (cond ((and pane (equal pane current)) 'current)
         ((herdr-panel-pane-open-p pane) 'open)
         (t 'closed)))
+
+;;; Pulsing A Row That Has Just Begun Wanting The User
+
+;; A fill that stays says two things at once: that a row wants the user,
+;; and that it has only just begun to.  The mark says the first for as long
+;; as the status lasts, and a background that never goes stops being read
+;; after the first minute of a session.  So the fill is spent on the
+;; second.  A row that changes into a status naming one flashes
+;; `herdr-panel-attention-pulses' times and then settles back to its mark.
+
+;; What pulses is keyed by what a row stands for, which every panel passes
+;; as the `:id' of its entry: a pane in the agents and reviews panels, a
+;; workspace or a space in the spaces panel.  herdr reports a status for
+;; each of those, so a change that reaches one row leaves the others alone
+;; instead of flashing the whole column.
+
+;; Each phase redraws every panel, because a fill is merged into the text a
+;; panel draws rather than laid over it.  That is a redraw or six spread
+;; over a second or two, and only after something changed; a panel already
+;; redraws itself whenever the session moves.
+
+(defcustom herdr-panel-attention-pulses 3
+  "How many times a row flashes when it begins wanting the user.
+The flash reports that the status is new.  What the row wants is said by
+its mark, which stays for as long as the status does, so zero here is a
+session that answers the question with the marks alone."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'natnum)
+
+(defcustom herdr-panel-attention-pulse-interval 0.4
+  "Seconds a row stays lit, and then dark, in each of its pulses.
+A pulse is one of each, so a row flashing three times has finished
+after six of these."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'number)
+
+(defvar herdr-panel--pulses (make-hash-table :test #'equal)
+  "Phases each pulsing row has left, keyed by what the row stands for.
+A row absent from this is not pulsing.  The count runs down from an odd
+number and the phases alternate from a lit one, so a row is lit while
+its count is odd.")
+
+(defvar herdr-panel--pulse-statuses (make-hash-table :test #'equal)
+  "The status each row was last seen in, keyed by what it stands for.
+A row absent from this has never been seen, and its first status is no
+change: without that, every agent already waiting would flash the
+moment a panel opened.")
+
+(defvar herdr-panel--pulse-timer nil
+  "Timer stepping the pulses, or nil while no row is pulsing.")
+
+(defun herdr-panel-attention-pulsing-p (id)
+  "Return non-nil when the row standing for ID is lit by a pulse.
+Nil for a row that is dark between two flashes as well as for one that
+has finished flashing: a panel draws the fill only where this says so."
+  (when-let* ((phases (and id (gethash id herdr-panel--pulses))))
+    (= (mod phases 2) 1)))
+
+(defun herdr-panel--pulse-begin (id)
+  "Start the row standing for ID flashing, or leave it to its mark.
+`herdr-panel-attention-pulses' set to zero asks for no flash at all,
+and a row given no phases never lights."
+  (let ((phases (1- (* 2 herdr-panel-attention-pulses))))
+    (if (> phases 0)
+        (puthash id phases herdr-panel--pulses)
+      (remhash id herdr-panel--pulses))))
+
+(defun herdr-panel--pulse-statuses ()
+  "Return the status of every row a panel can draw, keyed by the row.
+Panes, workspaces and spaces, because each of those is a row in one
+panel or another and herdr reports a status for each.  A pane running
+no agent is left out: there is nothing in it to ask for anything."
+  (let ((statuses (make-hash-table :test #'equal)))
+    (dolist (agent (herdr-session-agents))
+      (puthash (gethash "pane_id" agent)
+               (herdr-session-status agent) statuses))
+    (dolist (workspace (herdr-session-workspaces))
+      (puthash (gethash "workspace_id" workspace)
+               (herdr-session-status workspace) statuses))
+    (dolist (space (herdr-session-spaces))
+      (puthash (plist-get space :key)
+               (plist-get space :agent-status) statuses))
+    statuses))
+
+(defun herdr-panel--note-attention ()
+  "Flash every row that has just begun wanting the user.
+Called with a fresh tree in hand and before the panels redraw, so that
+a pulse beginning here is lit by the redraw that follows rather than
+one tree later."
+  (let ((statuses (herdr-panel--pulse-statuses)))
+    (maphash
+     (lambda (id status)
+       (let ((previous (gethash id herdr-panel--pulse-statuses 'unseen)))
+         (cond
+           ((not (herdr-panel-attention-face status))
+            (remhash id herdr-panel--pulses))
+           ((eq previous 'unseen))
+           ((equal previous status))
+           (t (herdr-panel--pulse-begin id)))))
+     statuses)
+    ;; A row herdr no longer reports keeps no pulse, or the table grows for
+    ;; as long as Emacs runs and lights whatever reuses its name.
+    (maphash (lambda (id _)
+               (unless (gethash id statuses)
+                 (remhash id herdr-panel--pulses)))
+             (copy-hash-table herdr-panel--pulses))
+    (setq herdr-panel--pulse-statuses statuses)
+    (herdr-panel--pulse-schedule)))
+
+(defun herdr-panel--pulse-schedule ()
+  "Step the pulses while a row is flashing, and stop stepping after.
+One timer however many rows flash together, started when the first of
+them does and cancelled when the last one finishes: a timer left
+running would redraw every panel for as long as Emacs lives."
+  (if (zerop (hash-table-count herdr-panel--pulses))
+      (when (timerp herdr-panel--pulse-timer)
+        (cancel-timer herdr-panel--pulse-timer)
+        (setq herdr-panel--pulse-timer nil))
+    (unless (timerp herdr-panel--pulse-timer)
+      (setq herdr-panel--pulse-timer
+            (run-at-time herdr-panel-attention-pulse-interval
+                         herdr-panel-attention-pulse-interval
+                         #'herdr-panel--pulse-step)))))
+
+(defun herdr-panel--pulse-step ()
+  "Take every pulsing row on to its next phase and redraw the panels."
+  (maphash (lambda (id phases)
+             (if (> phases 1)
+                 (puthash id (1- phases) herdr-panel--pulses)
+               (remhash id herdr-panel--pulses)))
+           (copy-hash-table herdr-panel--pulses))
+  (herdr-panel--pulse-schedule)
+  (herdr-panel-refresh-all))
+
+(defun herdr-panel--pulse-forget ()
+  "Stop every pulse and forget every status, as the last panel closes.
+Forgotten rather than kept, so that the first tree the next panel reads
+is no change and nothing flashes for a status it opened onto."
+  (clrhash herdr-panel--pulses)
+  (clrhash herdr-panel--pulse-statuses)
+  (herdr-panel--pulse-schedule))
 
 ;;; The Current Pane
 
@@ -932,6 +1087,9 @@ fact about Emacs, so no event from herdr will report any of it."
   "Keep the panels current with the session and with the selection.
 Idempotent, so every panel may call it as it opens."
   (add-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
+  ;; Ahead of that redraw on the same hook, so a row that has just begun
+  ;; wanting the user is already pulsing by the time it is drawn.
+  (add-hook 'herdr-session-change-hook #'herdr-panel--note-attention -50)
   (add-hook 'window-selection-change-functions #'herdr-panel--note-marks)
   (add-hook 'window-selection-change-functions
             #'herdr-panel-track-point-everywhere)
@@ -951,11 +1109,13 @@ Idempotent, so every panel may call it as it opens."
                                           buffer))
                     (buffer-list))
     (remove-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
+    (remove-hook 'herdr-session-change-hook #'herdr-panel--note-attention)
     (remove-hook 'window-selection-change-functions #'herdr-panel--note-marks)
     (remove-hook 'window-selection-change-functions
                  #'herdr-panel-track-point-everywhere)
     (remove-hook 'window-buffer-change-functions #'herdr-panel--note-marks)
-    (remove-hook 'herdr-session-fingerprint-functions #'herdr-panel-marks)))
+    (remove-hook 'herdr-session-fingerprint-functions #'herdr-panel-marks)
+    (herdr-panel--pulse-forget)))
 
 ;;; Rendering
 

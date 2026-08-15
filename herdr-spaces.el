@@ -248,8 +248,8 @@ A space of one workspace is drawn as that workspace: giving it a group
 to expand would put every ungrouped checkout behind a heading that
 holds a single child.
 
-A group carries the loudest status among its members, so a heading is
-filled for attention on the same terms a row is.  Collapsed, that is
+A group carries the loudest status among its members, so a heading
+flashes for attention on the same terms a row does.  Collapsed, that is
 all there is left to say that something inside is waiting."
   (let ((workspaces (plist-get space :workspaces))
         (status (plist-get space :agent-status)))
@@ -260,7 +260,9 @@ all there is left to say that something inside is waiting."
               (concat " " (herdr-panel-status-string status)
                       " " (herdr-panel--propertize (plist-get space :label)
                                                    'magit-section-heading)))
-            (herdr-panel-mark-attention start (point) status))
+            (herdr-panel-mark-attention
+             start (point)
+             (list :status status :id (plist-get space :key))))
           (dolist (workspace workspaces)
             (herdr-spaces--insert-workspace workspace current "   ")))
       (herdr-spaces--insert-workspace (car workspaces) current " "))))
@@ -279,6 +281,7 @@ in a column is the column's business and not the row's."
   (list :status (herdr-session-status workspace)
         :emphasis (herdr-spaces--emphasis (gethash "workspace_id" workspace)
                                           current)
+        :id (gethash "workspace_id" workspace)
         :label (herdr-spaces--name workspace)
         :detail (herdr-spaces--detail workspace)))
 

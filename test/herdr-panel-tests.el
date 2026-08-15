@@ -32,12 +32,17 @@
 ;; offered in.  `herdr-panel-tests-choosing' stands in for the completion
 ;; framework, and every panel's own suite uses it.
 
+;; The pulse is stepped by hand rather than waited for.  A phase lasts a
+;; fraction of a second in a live session, and a suite that slept through
+;; three of them per row would spend most of its time asleep.
+
 ;;; Code:
 
 (require 'cl-lib)
 (require 'ert)
 
 (require 'herdr-panel)
+(require 'herdr-session-tests)
 
 ;;; Fixtures
 
@@ -108,6 +113,43 @@ then loses its colour at the first refontification."
      (unwind-protect
          (with-current-buffer buffer ,@body)
        (kill-buffer buffer))))
+
+(defmacro herdr-panel-tests-with-pulses (&rest body)
+  "Evaluate BODY with nothing pulsing and no status remembered.
+Both tables are restored afterwards, and the timer is cancelled however
+BODY ends, so a test that starts a pulse leaves neither a lit row nor a
+timer stepping one."
+  (declare (indent 0) (debug t))
+  `(let ((herdr-panel--pulses (make-hash-table :test #'equal))
+         (herdr-panel--pulse-statuses (make-hash-table :test #'equal))
+         (herdr-panel--pulse-timer nil))
+     (unwind-protect
+         (progn ,@body)
+       (when (timerp herdr-panel--pulse-timer)
+         (cancel-timer herdr-panel--pulse-timer)))))
+
+(defmacro herdr-panel-tests-pulsing (id &rest body)
+  "Evaluate BODY with the row standing for ID lit by a pulse.
+Lit rather than merely pulsing: a test that draws a row asserts on what
+a reader sees at one moment, and the first phase of a pulse is the one
+showing the fill."
+  (declare (indent 1) (debug t))
+  `(herdr-panel-tests-with-pulses
+     (herdr-panel--pulse-begin ,id)
+     ,@body))
+
+(defun herdr-panel-tests-phases (id)
+  "Return whether the row for ID is lit, phase by phase, until it stops.
+One entry for each phase of the pulse it is in, so the lit ones counted
+are the flashes a reader sees.  Nothing is redrawn and no timer is
+started: the phases are stepped here rather than waited for."
+  (cl-letf (((symbol-function 'herdr-panel-refresh-all) #'ignore)
+            ((symbol-function 'herdr-panel--pulse-schedule) #'ignore))
+    (let ((phases nil))
+      (while (gethash id herdr-panel--pulses)
+        (push (and (herdr-panel-attention-pulsing-p id) t) phases)
+        (herdr-panel--pulse-step))
+      (nreverse phases))))
 
 ;;; Reading A Buffer Without The Terminal
 
@@ -207,56 +249,188 @@ colours by status."
     (should (eq (herdr-panel-attention-face "blocked") 'herdr-panel-current))
     (should-not (herdr-panel-attention-face "done"))))
 
-(ert-deftest herdr-panel-insert-entry:fills-a-row-that-wants-the-user ()
-  "An agent waiting on an answer fills its row, not only its mark.
+(ert-deftest herdr-panel-insert-entry:fills-a-row-that-has-just-begun ()
+  "An agent that has just begun waiting fills its row, not only its mark.
 Every character of it, the newline included, so that the fill runs to
 the width of the window rather than stopping where the text does."
-  (with-temp-buffer
-    (herdr-panel-insert-entry '(:status "blocked" :label "herdr"
-                                :detail "waiting for you"))
-    (should (herdr-panel-tests-worn-throughout-p
-             'herdr-panel-attention-blocked))))
+  (herdr-panel-tests-pulsing "w1:p1"
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "blocked" :id "w1:p1"
+                                  :label "herdr"
+                                  :detail "waiting for you"))
+      (should (herdr-panel-tests-worn-throughout-p
+               'herdr-panel-attention-blocked)))))
 
 (ert-deftest herdr-panel-insert-entry:fills-finished-work-its-own-way ()
   "Work that ended unwatched fills its row, in a colour of its own.
 Two states want the user for different reasons, and a reader who has
 to open a row to learn which is reading rather than glancing."
-  (with-temp-buffer
-    (herdr-panel-insert-entry '(:status "done" :label "herdr"))
-    (should (herdr-panel-tests-worn-throughout-p
-             'herdr-panel-attention-done))
-    (should-not (memq 'herdr-panel-attention-blocked
-                      (herdr-panel-tests-worn (point-min))))))
+  (herdr-panel-tests-pulsing "w1:p1"
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "done" :id "w1:p1"
+                                  :label "herdr"))
+      (should (herdr-panel-tests-worn-throughout-p
+               'herdr-panel-attention-done))
+      (should-not (memq 'herdr-panel-attention-blocked
+                        (herdr-panel-tests-worn (point-min)))))))
+
+(ert-deftest herdr-panel-insert-entry:leaves-a-row-unfilled-once-it-has-pulsed ()
+  "A row that has finished flashing says what it wants with its mark.
+The fill reports that the status is new, and a background that stayed
+for as long as the status did would stop being read."
+  (herdr-panel-tests-with-pulses
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "blocked" :id "w1:p1"
+                                  :label "herdr"))
+      (let ((worn (herdr-panel-tests-worn (point-min))))
+        (should-not (memq 'herdr-panel-attention-blocked worn)))
+      (goto-char (point-min))
+      (search-forward "●")
+      (should (memq 'herdr-panel-blocked
+                    (herdr-panel-tests-worn (match-beginning 0)))))))
 
 (ert-deftest herdr-panel-insert-entry:leaves-a-quiet-row-unfilled ()
-  "A status nobody has to act on fills nothing.
+  "A status nobody has to act on fills nothing, pulse or no pulse.
 A panel that lit every row would say no more than one that lit none."
-  (with-temp-buffer
-    (herdr-panel-insert-entry '(:status "working" :label "herdr"))
-    (let ((worn (herdr-panel-tests-worn (point-min))))
-      (should-not (memq 'herdr-panel-attention-blocked worn))
-      (should-not (memq 'herdr-panel-attention-done worn)))))
+  (herdr-panel-tests-pulsing "w1:p1"
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "working" :id "w1:p1"
+                                  :label "herdr"))
+      (let ((worn (herdr-panel-tests-worn (point-min))))
+        (should-not (memq 'herdr-panel-attention-blocked worn))
+        (should-not (memq 'herdr-panel-attention-done worn))))))
 
 (ert-deftest herdr-panel-insert-entry:fills-over-the-current-row ()
   "Which row wants you outranks which row you are looking at.
 Both are backgrounds, so the one in front is the one that shows, and
 the name on the current row is bold either way."
-  (with-temp-buffer
-    (herdr-panel-insert-entry '(:status "blocked" :emphasis current
-                                :label "herdr"))
-    (let ((worn (herdr-panel-tests-worn (point-min))))
-      (should (memq 'herdr-panel-current worn))
-      (should (< (seq-position worn 'herdr-panel-attention-blocked)
-                 (seq-position worn 'herdr-panel-current))))))
+  (herdr-panel-tests-pulsing "w1:p1"
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "blocked" :id "w1:p1"
+                                  :emphasis current :label "herdr"))
+      (let ((worn (herdr-panel-tests-worn (point-min))))
+        (should (memq 'herdr-panel-current worn))
+        (should (< (seq-position worn 'herdr-panel-attention-blocked)
+                   (seq-position worn 'herdr-panel-current)))))))
 
 (ert-deftest herdr-panel-insert-entry:fills-a-row-nobody-has-opened ()
   "An agent that wants you wants you whether or not you opened it.
 A closed row is dimmed as a whole, and the fill is what survives that:
 the row herdr is waiting on is the one a reader must not walk past."
-  (with-temp-buffer
-    (herdr-panel-insert-entry '(:status "blocked" :emphasis closed
-                                :label "herdr"))
-    (should (herdr-panel-tests-worn-throughout-p 'herdr-panel-attention-blocked))))
+  (herdr-panel-tests-pulsing "w1:p1"
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "blocked" :id "w1:p1"
+                                  :emphasis closed :label "herdr"))
+      (should (herdr-panel-tests-worn-throughout-p
+               'herdr-panel-attention-blocked)))))
+
+;;; Pulsing A Row That Has Just Begun Wanting The User
+
+(ert-deftest herdr-panel-attention-pulsing-p:lights-every-other-phase ()
+  "A pulse is a lit phase and then a dark one, counted down."
+  (herdr-panel-tests-with-pulses
+    (should-not (herdr-panel-attention-pulsing-p "w1:p1"))
+    (should-not (herdr-panel-attention-pulsing-p nil))
+    (puthash "w1:p1" 5 herdr-panel--pulses)
+    (should (herdr-panel-attention-pulsing-p "w1:p1"))
+    (puthash "w1:p1" 4 herdr-panel--pulses)
+    (should-not (herdr-panel-attention-pulsing-p "w1:p1"))))
+
+(ert-deftest herdr-panel--pulse-step:flashes-as-often-as-asked ()
+  "A row flashes `herdr-panel-attention-pulses' times and then settles."
+  (herdr-panel-tests-with-pulses
+    (let ((herdr-panel-attention-pulses 3))
+      (herdr-panel--pulse-begin "w1:p1")
+      (should (equal (herdr-panel-tests-phases "w1:p1") '(t nil t nil t)))
+      (should-not (herdr-panel-attention-pulsing-p "w1:p1")))
+    (let ((herdr-panel-attention-pulses 1))
+      (herdr-panel--pulse-begin "w1:p1")
+      (should (equal (herdr-panel-tests-phases "w1:p1") '(t))))))
+
+(ert-deftest herdr-panel--pulse-begin:lights-nothing-when-none-is-wanted ()
+  "Asking for no flashes leaves the row to its mark from the start."
+  (herdr-panel-tests-with-pulses
+    (let ((herdr-panel-attention-pulses 0))
+      (herdr-panel--pulse-begin "w1:p1")
+      (should-not (herdr-panel-attention-pulsing-p "w1:p1")))))
+
+(ert-deftest herdr-panel--pulse-schedule:steps-only-while-a-row-pulses ()
+  "The timer runs while something is flashing and stops when it stops.
+A timer left running redraws every panel twice a second for as long as
+Emacs lives."
+  (herdr-panel-tests-with-pulses
+    (herdr-panel--pulse-schedule)
+    (should-not herdr-panel--pulse-timer)
+    (herdr-panel--pulse-begin "w1:p1")
+    (herdr-panel--pulse-schedule)
+    (should (timerp herdr-panel--pulse-timer))
+    (clrhash herdr-panel--pulses)
+    (herdr-panel--pulse-schedule)
+    (should-not herdr-panel--pulse-timer)))
+
+;;; Noticing What Has Just Begun Wanting The User
+
+(ert-deftest herdr-panel--note-attention:pulses-a-pane-that-starts-waiting ()
+  "An agent that moves into waiting flashes the row standing for it."
+  (herdr-panel-tests-with-pulses
+    (herdr-session-looking-at '(("w1:p1" "working") ("w1:p2" "working"))
+      (herdr-panel--note-attention))
+    (herdr-session-looking-at '(("w1:p1" "blocked") ("w1:p2" "working"))
+      (herdr-panel--note-attention))
+    (should (herdr-panel-attention-pulsing-p "w1:p1"))
+    (should-not (herdr-panel-attention-pulsing-p "w1:p2"))))
+
+(ert-deftest herdr-panel--note-attention:says-nothing-on-the-first-look ()
+  "A first sighting is no change.
+Read as one, every agent already waiting would flash the moment a panel
+opened, which is what opening a panel would look like."
+  (herdr-panel-tests-with-pulses
+    (herdr-session-looking-at '(("w1:p1" "blocked") ("w1:p2" "done"))
+      (herdr-panel--note-attention))
+    (should-not (herdr-panel-attention-pulsing-p "w1:p1"))
+    (should-not (herdr-panel-attention-pulsing-p "w1:p2"))))
+
+(ert-deftest herdr-panel--note-attention:stops-a-row-that-has-quieted ()
+  "A row whose agent went back to work stops flashing at once.
+Visiting a pane is what usually quiets it, and a row that went on
+flashing after it was read would be asking for what it already had."
+  (herdr-panel-tests-with-pulses
+    (herdr-session-looking-at '(("w1:p1" "working"))
+      (herdr-panel--note-attention))
+    (herdr-session-looking-at '(("w1:p1" "blocked"))
+      (herdr-panel--note-attention))
+    (should (herdr-panel-attention-pulsing-p "w1:p1"))
+    (herdr-session-looking-at '(("w1:p1" "working"))
+      (herdr-panel--note-attention))
+    (should-not (herdr-panel-attention-pulsing-p "w1:p1"))))
+
+(ert-deftest herdr-panel--note-attention:forgets-a-row-herdr-has-dropped ()
+  "A pane herdr no longer reports keeps no pulse.
+Kept, the table grows for as long as Emacs runs and lights whatever
+takes the name next."
+  (herdr-panel-tests-with-pulses
+    (herdr-session-looking-at '(("w1:p1" "working"))
+      (herdr-panel--note-attention))
+    (herdr-session-looking-at '(("w1:p1" "blocked"))
+      (herdr-panel--note-attention))
+    (herdr-session-looking-at '()
+      (herdr-panel--note-attention))
+    (should-not (herdr-panel-attention-pulsing-p "w1:p1"))))
+
+(ert-deftest herdr-panel--note-attention:pulses-a-workspace-row-as-well ()
+  "A workspace row follows the status herdr rolls up onto it.
+The spaces panel draws workspaces rather than panes, so the row it
+flashes is named by the workspace."
+  (herdr-panel-tests-with-pulses
+    (herdr-session-with-snapshot
+        (list :workspaces
+              (vector (herdr-session-test-workspace "w1" "herdr" "working")))
+      (herdr-panel--note-attention))
+    (herdr-session-with-snapshot
+        (list :workspaces
+              (vector (herdr-session-test-workspace "w1" "herdr" "done")))
+      (herdr-panel--note-attention))
+    (should (herdr-panel-attention-pulsing-p "w1"))))
 
 ;;; Telling Two Rows Apart
 

@@ -209,6 +209,7 @@ of the same kind apart, so that names the row and the kind follows it
 rather than the other way round."
   (list :status (herdr-session-status agent)
         :emphasis (herdr-panel-emphasis (gethash "pane_id" agent) current)
+        :id (gethash "pane_id" agent)
         :label (herdr-agents--where agent)
         :aside (herdr-agents--kind agent)
         :detail (gethash "terminal_title_stripped" agent)))

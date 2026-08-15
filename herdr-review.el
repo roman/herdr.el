@@ -274,6 +274,7 @@ the workspace the thing being reviewed.  What is under review goes
 beneath it, as the script counted it when the review opened."
   (list :status (herdr-session-status review)
         :emphasis (herdr-panel-emphasis (gethash "pane_id" review) current)
+        :id (gethash "pane_id" review)
         :label (herdr-review--label review)
         :aside (herdr-panel-text herdr-review-icon 'herdr-review-icon)
         :detail (herdr-review--summary review)))
