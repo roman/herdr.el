@@ -116,6 +116,50 @@ be rewritten."
     (herdr-ui--show-panels)
     (should (null herdr-ui-tests--shown))))
 
+;;; Passing The Column By
+
+;; These call the real `herdr-ui--display', which the fixture above stubs
+;; out, so they make a window and take it down again.
+
+(defmacro herdr-ui-tests-with-panel (name &rest body)
+  "Evaluate BODY with a panel window called NAME on the frame.
+The window is deleted afterwards, and the frame is left holding the one
+window it started with."
+  (declare (indent 1) (debug t))
+  `(let ((buffer (get-buffer-create ,name)))
+     (unwind-protect
+         (save-selected-window
+           (herdr-ui--display buffer 0 1.0)
+           ,@body)
+       (when-let* ((window (get-buffer-window buffer)))
+         (delete-window window))
+       (kill-buffer buffer))))
+
+(ert-deftest herdr-ui--display:passes-the-panels-by ()
+  "`C-x o' moves between the windows you work in, not the furniture.
+A panel is reached by the command that names it, so counting it in the
+cycle spends a keystroke on a window nobody meant to land in.
+
+`other-window' is what reads the parameter; `next-window' returns a
+skipped window like any other, so the move itself is what to assert."
+  (herdr-ui-tests-with-panel " *herdr-ui-test-panel*"
+    (let ((panel (get-buffer-window buffer))
+          (working (selected-window)))
+      (should (window-parameter panel 'no-other-window))
+      ;; There is somewhere else to land, or staying put says nothing.
+      (should (memq panel (window-list)))
+      (other-window 1)
+      (should (eq (selected-window) working)))))
+
+(ert-deftest herdr-ui--display:stops-on-a-panel-when-asked ()
+  "The cycle takes the panels back when the option says so."
+  (let ((herdr-ui-panel-other-window 'stop))
+    (herdr-ui-tests-with-panel " *herdr-ui-test-panel*"
+      (let ((panel (get-buffer-window buffer)))
+        (should-not (window-parameter panel 'no-other-window))
+        (other-window 1)
+        (should (eq (selected-window) panel))))))
+
 ;;; Quitting
 
 (ert-deftest herdr-ui-quit:kills-panels-and-spares-terminals ()

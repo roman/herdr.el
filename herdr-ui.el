@@ -102,6 +102,25 @@ rest of herdr, because it needs a tool herdr does not."
 
 (declare-function herdr-review-panel "herdr-review" ())
 
+(defcustom herdr-ui-panel-other-window 'skip
+  "Whether `other-window' stops on a panel.
+`skip' takes the panel column out of the cycle, so \\[other-window]
+and everything built on it move between the windows you work in and
+pass the furniture by.  A panel is still reached by the command that
+names it — `herdr-spaces', `herdr-agents', `herdr-review', the visit
+commands they each offer, and `herdr-ui-toggle-panels' from inside the
+layout — and still by the mouse.
+
+`stop' leaves the panels in the cycle, which is what any other window
+does.
+
+Only the cycle is affected.  `ignore-window-parameters' bound around a
+call reaches a skipped window once without changing this."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(choice (const :tag "Pass the panels by" skip)
+                 (const :tag "Stop on them like any window" stop)))
+
 (defcustom herdr-ui-tame-window-packages t
   "Whether to ask window-managing packages to leave the layout alone.
 Packages that resize or fade windows behind your back fight a fixed
@@ -227,7 +246,9 @@ HEIGHT is its share of the frame."
      ;; A panel is furniture: nothing else may be displayed over it, and
      ;; it must not be counted when Emacs looks for a window to reuse.
      (dedicated . t)
-     (window-parameters . ((no-delete-other-windows . t))))))
+     (window-parameters
+      . ((no-delete-other-windows . t)
+         (no-other-window . ,(eq herdr-ui-panel-other-window 'skip)))))))
 
 (defun herdr-ui--terminal-buffer (pane)
   "Return the buffer mirroring PANE, or nil when there is none."
