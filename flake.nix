@@ -5,8 +5,12 @@
     nixpkgs.url = "github:NixOS/nixpkgs/release-25.11";
 
     # ghostel landed in nixpkgs after the release branched, and it is the only
-    # thing here that needs the unstable channel.
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # thing here that reaches past the release channel. multiverse addresses an
+    # unstable revision without being one: it declares `inputs = { }` and fetches
+    # the revision with `builtins.fetchTree` when the overlay is forced, so a
+    # consumer that only wants this repository's source tree never pays for a
+    # second nixpkgs. Nothing to `follows` here for the same reason.
+    multiverse.url = "github:fzakaria/nixpkgs-multiverse";
 
     systems.url = "github:nix-systems/default";
 

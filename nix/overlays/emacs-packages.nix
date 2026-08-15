@@ -10,11 +10,19 @@
 # ghostel's dynamic module is compiled against a sibling build of the Emacs that
 # loads it. Emacs keeps the module ABI stable across a major version, and
 # `just check` proves it: `require 'ghostel' loads the module.
+#
+# `tip` is the newest revision multiverse has indexed, so this tracks unstable
+# the same way the channel input did and moves on `nix flake update multiverse`.
+# A version pin is not available here: multiverse indexes top-level attributes,
+# and these two live in the emacsPackages scope.
 inputs:
 
 _final: prev:
 let
-  unstable = inputs.nixpkgs-unstable.legacyPackages.${prev.stdenv.hostPlatform.system};
+  unstable =
+    (inputs.multiverse.lib.mkMultiverse {
+      system = prev.stdenv.hostPlatform.system;
+    }).tip;
 in
 {
   emacsPackages = prev.emacsPackages.overrideScope (
