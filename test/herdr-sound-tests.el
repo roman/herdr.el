@@ -43,15 +43,34 @@
 (defmacro herdr-sound-with-recorder (&rest body)
   "Evaluate BODY with playback recorded rather than heard.
 Each pane's last seen status is forgotten first, so a test starts with
-a tree it has never seen before."
+a tree it has never seen before.
+
+`herdr-sound-panes' is held at `any' so that a test about which
+transitions sound does not also have to open a buffer for every pane it
+names.  Which panes are allowed to sound at all is its own question,
+under \"Which Panes\" below, where the default is what runs."
   (declare (indent 0) (debug t))
   `(let ((herdr-sound-test-played nil)
          (herdr-sound-enabled t)
          (herdr-sound-finish 'unseen)
+         (herdr-sound-panes 'any)
          (herdr-sound--statuses (make-hash-table :test #'equal)))
      (cl-letf (((symbol-function 'herdr-sound--play)
                 (lambda (sound) (push sound herdr-sound-test-played))))
        ,@body)))
+
+(defmacro herdr-sound-with-mirror (pane &rest body)
+  "Evaluate BODY with a buffer of this Emacs mirroring PANE.
+The buffer is not displayed, which is the state a pane is in when you
+have opened it and gone to work somewhere else: open, and not watched."
+  (declare (indent 1) (debug t))
+  `(let ((buffer (generate-new-buffer (format "*herdr:%s*" ,pane))))
+     (unwind-protect
+         (progn
+           (with-current-buffer buffer
+             (setq-local herdr-term--pane ,pane))
+           ,@body)
+       (kill-buffer buffer))))
 
 (defun herdr-sound-test-snapshot (&rest agents)
   "Return a session snapshot holding AGENTS.
@@ -229,6 +248,63 @@ batch Emacs has no second frame to make invisible."
             (herdr-sound--watched-p "w1:p1"))
           (should (equal frames '(visible))))
       (kill-buffer buffer))))
+
+;;; Which Panes
+
+(ert-deftest herdr-sound-panes:hears-only-what-is-open-by-default ()
+  "The default is the pane you have open, not every pane herdr reports."
+  (should (eq (default-value 'herdr-sound-panes) 'open)))
+
+(ert-deftest herdr-sound--note-change:says-nothing-about-a-pane-you-have-not-opened ()
+  "A sound is an interruption, and this one you could not act on.
+Neither half sounds: an agent asking a question in a workspace no buffer
+here mirrors is as far away as one finishing in it."
+  (herdr-sound-with-recorder
+    (let ((herdr-sound-panes 'open))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "blocked")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "done")))
+      (should (null herdr-sound-test-played)))))
+
+(ert-deftest herdr-sound--note-change:asks-for-attention-in-a-pane-you-have-open ()
+  "A pane you opened is one you meant to follow, so it may ask."
+  (herdr-sound-with-recorder
+    (let ((herdr-sound-panes 'open))
+      (herdr-sound-with-mirror "w1:p1"
+        (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+        (herdr-sound-test-observe '(("w1:p1" "claude" "blocked")))
+        (should (equal herdr-sound-test-played '(request)))))))
+
+(ert-deftest herdr-sound--note-change:reports-a-finish-in-a-pane-you-have-open ()
+  "Open and not on screen is the state a finish is worth announcing in.
+The two guards ask different questions: whether you have the pane at
+all, and whether you are looking at it as the work ends."
+  (herdr-sound-with-recorder
+    (let ((herdr-sound-panes 'open))
+      (herdr-sound-with-mirror "w1:p1"
+        (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+        (herdr-sound-test-observe '(("w1:p1" "claude" "done")))
+        (should (equal herdr-sound-test-played '(done)))))))
+
+(ert-deftest herdr-sound--note-change:hears-every-pane-when-asked ()
+  "`any' is herdr's own reach: every pane its server reports.
+Worth having where this Emacs is the only place a notification would be
+heard from at all."
+  (herdr-sound-with-recorder
+    (let ((herdr-sound-panes 'any))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "working")))
+      (herdr-sound-test-observe '(("w1:p1" "claude" "blocked")))
+      (should (equal herdr-sound-test-played '(request))))))
+
+(ert-deftest herdr-sound--open-p:answers-without-the-terminal ()
+  "No pane is open when nothing can mirror one yet.
+The terminal's variable is only declared until herdr-term loads, and
+`buffer-local-value' signals on exactly that."
+  (let ((pane (default-value 'herdr-term--pane)))
+    (makunbound 'herdr-term--pane)
+    (unwind-protect
+        (should-not (herdr-sound--open-p "w1:p1"))
+      (setq-default herdr-term--pane pane))))
 
 ;;; Which Agents
 

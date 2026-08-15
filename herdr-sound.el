@@ -46,6 +46,15 @@
 ;; there and not here is heard.  That is the intent — the question worth
 ;; asking from Emacs is whether you can see the pane from Emacs.
 
+;; It departs once more, and this time for both sounds.  herdr's server
+;; forwards a notification for every pane it owns, and by default nothing
+;; here sounds for a pane no buffer of this Emacs mirrors: a bell about a
+;; workspace you never opened is one you cannot act on without going to
+;; find it, and the panels are the quieter place to learn it happened.
+;; `herdr-sound-panes' set to `any' takes herdr's reach back.  Note that
+;; the two questions are different — a pane can be open here and not on
+;; screen, which is exactly the pane a finish is worth announcing for.
+
 ;; Both of those readings trust herdr to report "done" at all, and there
 ;; are setups where it never does.  It writes `seen' from whether the pane
 ;; is its own workspace's active tab and whether the terminal running herdr
@@ -111,6 +120,27 @@ announced under both, because herdr never suppresses that one."
   :group 'herdr-sound
   :type '(choice (const :tag "Only a finish herdr calls unseen" unseen)
                  (const :tag "Every finish" any)))
+
+(defcustom herdr-sound-panes 'open
+  "Which panes are allowed to sound.
+`open' hears a pane some buffer of this Emacs mirrors, and nothing
+else.  A sound is an interruption, and one about a workspace you never
+opened here is an interruption you cannot act on without going to find
+the pane first.  What happens over there is still on the panels, and
+herdr still announces it in its own window.
+
+`any' hears every pane herdr reports, which is herdr's own reach: its
+server forwards the notification for a pane whatever any client has
+open.  This is the setting for an Emacs that is the only place you
+would hear one from.
+
+This asks whether you have the pane at all.  Whether you are looking
+at it as the work ends is `herdr-sound-finish', and both have to allow
+a sound before it is played."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-sound
+  :type '(choice (const :tag "Only a pane open in this Emacs" open)
+                 (const :tag "Every pane herdr reports" any)))
 
 (defcustom herdr-sound-request-file nil
   "Sound file for an agent that started waiting, or nil for the bell.
@@ -239,34 +269,55 @@ would announce the acknowledgement rather than the work."
 
 (defun herdr-sound--wanted-p (sound pane)
   "Return non-nil when SOUND is worth playing for PANE.
-A request always is.  A finish is dropped when the pane is on screen
-here, unless `herdr-sound-finish' is `any': asking for every finish
-and then dropping the visible ones would leave most of them unheard,
-because a pane is on screen for as long as anybody is working in the
-layout."
-  (or (eq sound 'request)
-      (eq herdr-sound-finish 'any)
-      (not (herdr-sound--watched-p pane))))
+Nothing is, for a pane no buffer of this Emacs mirrors, unless
+`herdr-sound-panes' is `any'.
+
+Past that a request always is.  A finish is dropped when the pane is on
+screen here, unless `herdr-sound-finish' is `any': asking for every
+finish and then dropping the visible ones would leave most of them
+unheard, because a pane is on screen for as long as anybody is working
+in the layout."
+  (and (herdr-sound--allowed-p pane)
+       (or (eq sound 'request)
+           (eq herdr-sound-finish 'any)
+           (not (herdr-sound--watched-p pane)))))
+
+(defun herdr-sound--allowed-p (pane)
+  "Return non-nil when PANE is one of the panes `herdr-sound-panes' names."
+  (or (eq herdr-sound-panes 'any)
+      (herdr-sound--open-p pane)))
 
 (defun herdr-sound--heard-p (kind)
   "Return non-nil when an agent of KIND is allowed to sound."
   (not (eq (cdr (assoc kind herdr-sound-agents)) 'off)))
 
+(defun herdr-sound--buffers (pane)
+  "Return the buffers of this Emacs mirroring PANE.
+None when the terminal has never been loaded, which is right rather
+than merely safe — with no terminal there is no pane open here.  The
+variable it reads is declared by the panels and given its value by the
+terminal, and `buffer-local-value' signals on one that is declared and
+unbound."
+  (and (boundp 'herdr-term--pane)
+       (seq-filter (lambda (buffer)
+                     (equal (buffer-local-value 'herdr-term--pane buffer)
+                            pane))
+                   (buffer-list))))
+
+(defun herdr-sound--open-p (pane)
+  "Return non-nil when some buffer of this Emacs mirrors PANE.
+Open, rather than on screen: a pane you opened and left behind another
+window is one you meant to follow."
+  (and (herdr-sound--buffers pane) t))
+
 (defun herdr-sound--watched-p (pane)
   "Return non-nil when PANE is shown by a window on a visible frame.
 Visible, rather than any frame at all: a pane on an iconified frame or
 one on another desktop is not being watched, and taking it for watched
-drops the sound that says the work is done.
-
-Nil when the terminal has never been loaded, which is right rather
-than merely safe — with no terminal there are no panes on screen to
-be watching."
-  (and (boundp 'herdr-term--pane)
-       (seq-some (lambda (buffer)
-                   (and (equal (buffer-local-value 'herdr-term--pane buffer)
-                               pane)
-                        (get-buffer-window buffer 'visible)))
-                 (buffer-list))))
+drops the sound that says the work is done."
+  (and (seq-some (lambda (buffer) (get-buffer-window buffer 'visible))
+                 (herdr-sound--buffers pane))
+       t))
 
 ;;; Playing
 

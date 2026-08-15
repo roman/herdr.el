@@ -203,6 +203,14 @@ the one it has already discounted. A finish is dropped again here when the
 pane is on screen in Emacs, which is the one question herdr cannot answer
 for you.
 
+Both sounds are for a pane you have open here. `herdr-sound-panes` defaults
+to `open`, so nothing rings for a workspace no buffer of this Emacs mirrors
+— that bell is one you could not act on without going to find the pane, and
+the panels are the quieter place to learn it happened. Set it to `any` for
+herdr's own reach, which is every pane its server reports. The two questions
+are separate: a pane open here and behind another window is exactly the pane
+a finish is worth announcing for.
+
 The default is the bell, because herdr's own two sounds are mp3 files
 compiled into its binary with no copy on disk, and Emacs plays only wav and
 au. Name a file in `herdr-sound-request-file` or `herdr-sound-done-file` and
