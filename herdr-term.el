@@ -495,7 +495,7 @@ invalid pane never becomes valid."
         (let ((detail (or herdr-term--close-reason (string-trim event))))
           (cond
             ((herdr-term--pane-gone-p detail)
-             (herdr-term--end-for-good detail))
+             (herdr-term--end-for-good))
             (herdr-term--last-seq
              (herdr-term--reconnect (format "stream exited: %s" detail)))
             (t
@@ -512,14 +512,16 @@ invalid pane never becomes valid."
                         herdr-term--fail-count
                         herdr-term-max-connect-attempts))))))))))
 
-(defconst herdr-term--pane-gone-regexp (rx "not found" eos)
+(defconst herdr-term--pane-gone-regexp (rx (or "not found" "exited") eos)
   "Match a close reason that means the pane itself is gone.
-As of herdr 0.7.5 three reasons end this way: a fresh connect that
+As of herdr 0.7.5 four reasons end this way: a fresh connect that
 cannot resolve the pane says \"terminal session ACTION failed: terminal
-target PANE not found\", and an attach that never lands or is taken
-away says \"terminal attach failed\" or \"terminal attach ended:
-terminal ID not found\".  Every other reason herdr sends ends
-elsewhere, several of them in a \"; retry\" this must not match.
+target PANE not found\", an attach that never lands or is taken away
+says \"terminal attach failed\" or \"terminal attach ended: terminal ID
+not found\", and a pane whose program finished says \"terminal ID
+exited\" — which herdr sends only once the pane is off its own tree.
+Every other reason herdr sends ends elsewhere, several of them in a
+\"; retry\" this must not match.
 
 Matched as text because nothing structured carries it — the reason
 arrives as prose, and the alternative is a second question to the
@@ -536,11 +538,16 @@ the wire, where the reason is whatever JSON herdr sent."
   (and (stringp detail)
        (string-match-p herdr-term--pane-gone-regexp detail)))
 
-(defun herdr-term--end-for-good (detail)
-  "End this buffer's stream for good, DETAIL being why its pane went.
+(defun herdr-term--end-for-good ()
+  "End this buffer's stream for good, its pane having gone.
 Retrying is pointless, so the stream, its bridge and every pending
 timer go rather than being rescheduled.  What becomes of the buffer is
 `herdr-term-pane-gone-action'.
+
+Nothing is reported.  A pane that went is how a pane ordinarily ends,
+and closing one workspace ends every pane in it at once, so a line each
+would bury whatever the echo area was showing under a verdict the mode
+line already carries and `herdr-term--close-reason' still explains.
 
 A kill is deferred rather than run here, because `kill-buffer' runs
 `kill-buffer-query-functions' and arbitrary hooks, and a process
@@ -548,7 +555,6 @@ sentinel — holding this buffer current — is no place for either."
   (herdr-term--teardown)
   (setq herdr-term--pane-gone t)
   (herdr-term--update-mode-line)
-  (message "herdr-term[%s]: pane closed (%s)" herdr-term--pane detail)
   (when (eq herdr-term-pane-gone-action 'kill)
     (run-at-time 0 nil #'kill-buffer (current-buffer))))
 
@@ -691,14 +697,16 @@ exactly as a dropped frame does and recovers the same way."
            'resync)))
 
 (defun herdr-term--note-closed (object)
-  "Report the `reason' carried by `terminal.closed' message OBJECT.
-Recovery belongs to the process sentinel, so this only records.  It
-leaves `herdr-term--last-seq' intact in particular: clearing it would
+  "Record the `reason' carried by `terminal.closed' message OBJECT.
+Recovery belongs to the process sentinel, which decides from this
+reason whether the stream reconnects or the pane has ended, and reports
+only the outcome.  A close is the beginning of that decision and not
+news on its own, so nothing is said here.
+
+`herdr-term--last-seq' is left intact in particular: clearing it would
 strand a still live stream on \"delta before initial full frame\" for
 every frame that follows."
   (setq herdr-term--close-reason (gethash "reason" object))
-  (message "herdr-term[%s]: stream closed (%s)"
-           herdr-term--pane herdr-term--close-reason)
   nil)
 
 (defun herdr-term--maybe-resize (rows cols)

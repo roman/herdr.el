@@ -809,6 +809,25 @@ for anything typed into it to reach."
         (should-not (process-live-p bridge))
         (should-not herdr-term--input-bridge)))))
 
+(ert-deftest herdr-term--sentinel:says-nothing-about-a-pane-that-ended ()
+  "Closing a workspace is not a fault and must reach no echo area.
+Every pane of a workspace reports itself gone as it goes, so anything
+said here arrives once per pane and buries whatever the user was
+reading."
+  (let ((herdr-term-pane-gone-action 'keep)
+        (reported nil))
+    (herdr-term-with-test-buffer
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format &rest args)
+                   (push (apply #'format-message format args) reported))))
+        (setq herdr-term--last-seq 7)
+        (herdr-term-test-apply
+         (json-serialize (list :type "terminal.closed"
+                               :reason "terminal term_abc exited")))
+        (herdr-term-test-end-stream herdr-term--process "finished\n"))
+      (should herdr-term--pane-gone)
+      (should (null reported)))))
+
 (ert-deftest herdr-term--pane-gone-p:knows-what-herdr-actually-sends ()
   "Every reason herdr 0.7.5 gives for a pane that is not there.
 The match is on the server's own wording, so a reason that gains a
@@ -817,7 +836,8 @@ literal strings, quoted from herdr's headless server, and a change to
 any of them should fail here rather than in a pane weeks later."
   (dolist (reason '("terminal session control failed: terminal target w1:p1 not found"
                     "terminal attach failed: terminal term_abc not found"
-                    "terminal attach ended: terminal term_abc not found"))
+                    "terminal attach ended: terminal term_abc not found"
+                    "terminal term_abc exited"))
     (should (herdr-term--pane-gone-p reason)))
   ;; The near misses, which are all retryable.
   (dolist (reason '("terminal attach failed: terminal term_abc has a read in progress; retry"
