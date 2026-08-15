@@ -151,18 +151,19 @@ behind a heading that looked quiet."
             :panes
             (vector (herdr-spaces-tests--pane "w1:p1" "w1")
                     (herdr-spaces-tests--pane "w2:p1" "w2")))
-    (herdr-panel-tests-with-pulses
-      (herdr-panel--pulse-begin "repo-a")
-      (herdr-panel--pulse-begin "w2")
-      (with-temp-buffer
-        (magit-insert-section (herdr-spaces-tests-root)
-          (herdr-spaces--insert (car (herdr-session-spaces)) nil))
-        (should (memq 'herdr-panel-attention-blocked
-                      (herdr-spaces-tests--fill-at "repo-a")))
-        (should (memq 'herdr-panel-attention-blocked
-                      (herdr-spaces-tests--fill-at "fix")))
-        (should-not (memq 'herdr-panel-attention-blocked
-                          (herdr-spaces-tests--fill-at "main")))))))
+    (herdr-panel-tests-with-open-panes '("w1:p1" "w2:p1")
+      (herdr-panel-tests-with-pulses
+        (herdr-panel--pulse-begin "repo-a")
+        (herdr-panel--pulse-begin "w2")
+        (with-temp-buffer
+          (magit-insert-section (herdr-spaces-tests-root)
+            (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+          (should (memq 'herdr-panel-attention-blocked
+                        (herdr-spaces-tests--fill-at "repo-a")))
+          (should (memq 'herdr-panel-attention-blocked
+                        (herdr-spaces-tests--fill-at "fix")))
+          (should-not (memq 'herdr-panel-attention-blocked
+                            (herdr-spaces-tests--fill-at "main"))))))))
 
 (ert-deftest herdr-spaces--insert:leaves-a-quiet-group-unfilled ()
   "A space with nothing waiting in it draws as it always did."
@@ -175,13 +176,38 @@ behind a heading that looked quiet."
             :panes
             (vector (herdr-spaces-tests--pane "w1:p1" "w1")
                     (herdr-spaces-tests--pane "w2:p1" "w2")))
+    (herdr-panel-tests-with-open-panes '("w1:p1" "w2:p1")
+      (herdr-panel-tests-with-pulses
+        (herdr-panel--pulse-begin "repo-a")
+        (with-temp-buffer
+          (magit-insert-section (herdr-spaces-tests-root)
+            (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+          (should-not (memq 'herdr-panel-attention-blocked
+                            (herdr-spaces-tests--fill-at "repo-a"))))))))
+
+(ert-deftest herdr-spaces--insert:leaves-a-group-nobody-has-opened-unfilled ()
+  "A group no buffer here mirrors does not flash, heading or member.
+The flash is for somebody working in the layout, and a repository
+nobody opened in this Emacs is not in it."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "main" "idle"
+                                                 "repo-a")
+                    (herdr-session-test-workspace "w2" "fix" "blocked"
+                                                  "repo-a"))
+            :panes
+            (vector (herdr-spaces-tests--pane "w1:p1" "w1")
+                    (herdr-spaces-tests--pane "w2:p1" "w2")))
     (herdr-panel-tests-with-pulses
       (herdr-panel--pulse-begin "repo-a")
+      (herdr-panel--pulse-begin "w2")
       (with-temp-buffer
         (magit-insert-section (herdr-spaces-tests-root)
           (herdr-spaces--insert (car (herdr-session-spaces)) nil))
         (should-not (memq 'herdr-panel-attention-blocked
-                          (herdr-spaces-tests--fill-at "repo-a")))))))
+                          (herdr-spaces-tests--fill-at "repo-a")))
+        (should-not (memq 'herdr-panel-attention-blocked
+                          (herdr-spaces-tests--fill-at "fix")))))))
 
 ;;; _
 (provide 'herdr-spaces-tests)

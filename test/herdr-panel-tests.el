@@ -114,6 +114,27 @@ then loses its colour at the first refontification."
          (with-current-buffer buffer ,@body)
        (kill-buffer buffer))))
 
+(defmacro herdr-panel-tests-with-open-panes (panes &rest body)
+  "Evaluate BODY with a buffer of this Emacs mirroring each of PANES.
+The terminal's variable is given a global value for as long as BODY
+runs, because every reader of it guards on whether it is bound at all
+and it is only declared until a terminal loads it."
+  (declare (indent 1) (debug t))
+  `(let ((bound (boundp 'herdr-term--pane))
+         (buffers nil))
+     (unless bound
+       (setq-default herdr-term--pane nil))
+     (dolist (pane ,panes)
+       (let ((buffer (generate-new-buffer (format " *herdr %s*" pane))))
+         (with-current-buffer buffer
+           (setq-local herdr-term--pane pane))
+         (push buffer buffers)))
+     (unwind-protect
+         (progn ,@body)
+       (mapc #'kill-buffer buffers)
+       (unless bound
+         (makunbound 'herdr-term--pane)))))
+
 (defmacro herdr-panel-tests-with-pulses (&rest body)
   "Evaluate BODY with nothing pulsing and no status remembered.
 Both tables are restored afterwards, and the timer is cancelled however
@@ -313,16 +334,17 @@ the name on the current row is bold either way."
         (should (< (seq-position worn 'herdr-panel-attention-blocked)
                    (seq-position worn 'herdr-panel-current)))))))
 
-(ert-deftest herdr-panel-insert-entry:fills-a-row-nobody-has-opened ()
-  "An agent that wants you wants you whether or not you opened it.
-A closed row is dimmed as a whole, and the fill is what survives that:
-the row herdr is waiting on is the one a reader must not walk past."
+(ert-deftest herdr-panel-insert-entry:leaves-a-row-nobody-has-opened-unfilled ()
+  "A row this Emacs has no buffer for does not flash at it.
+A flash is for the corner of the eye of somebody working in the
+layout, and a workspace nobody opened here is not in it; the mark still
+says the agent wants the user."
   (herdr-panel-tests-pulsing "w1:p1"
     (with-temp-buffer
       (herdr-panel-insert-entry '(:status "blocked" :id "w1:p1"
                                   :emphasis closed :label "herdr"))
-      (should (herdr-panel-tests-worn-throughout-p
-               'herdr-panel-attention-blocked)))))
+      (should-not (memq 'herdr-panel-attention-blocked
+                        (herdr-panel-tests-worn (point-min)))))))
 
 ;;; Pulsing A Row That Has Just Begun Wanting The User
 

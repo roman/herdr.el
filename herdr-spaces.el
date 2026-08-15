@@ -262,7 +262,9 @@ all there is left to say that something inside is waiting."
                                                    'magit-section-heading)))
             (herdr-panel-mark-attention
              start (point)
-             (list :status status :id (plist-get space :key))))
+             (list :status status
+                   :id (plist-get space :key)
+                   :emphasis (herdr-spaces--space-emphasis space current))))
           (dolist (workspace workspaces)
             (herdr-spaces--insert-workspace workspace current "   ")))
       (herdr-spaces--insert-workspace (car workspaces) current " "))))
@@ -359,6 +361,18 @@ workspace the row stands for, not a particular pane of it."
                    (herdr-session-panes))
          'open)
         (t 'closed)))
+
+(defun herdr-spaces--space-emphasis (space current)
+  "Return how to draw the heading of SPACE, given the CURRENT workspace.
+A group is as open as its openest member: the heading stands for all of
+them, so one workspace mirrored here is a group the reader can see."
+  (let ((emphases (mapcar (lambda (workspace)
+                            (herdr-spaces--emphasis
+                             (gethash "workspace_id" workspace) current))
+                          (plist-get space :workspaces))))
+    (cond ((memq 'current emphases) 'current)
+          ((memq 'open emphases) 'open)
+          (t 'closed))))
 
 (defun herdr-spaces--branch (workspace)
   "Return the checkout WORKSPACE sits on, or nil when it is not a worktree.

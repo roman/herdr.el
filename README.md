@@ -281,6 +281,11 @@ lasting `herdr-panel-attention-pulse-interval` seconds, and then goes. What
 the agent wants is left to its mark, which keeps the colour for as long as
 the status does.
 
+The flash is aimed at the corner of your eye while you work, so it is shown
+only for a row this Emacs has a buffer for. A workspace you never opened
+here still shows its mark, and the sounds of `herdr-sound-mode` are what
+carry a finish you are nowhere near.
+
 Set `herdr-panel-attention-pulses` to 0 to have the panels say all of this
 with their marks alone, and `herdr-panel-attention-faces` to choose which
 statuses flash and in what colour.

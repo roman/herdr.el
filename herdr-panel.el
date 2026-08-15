@@ -366,14 +366,16 @@ Which statuses are filled, and with what, is
 
 (defun herdr-panel-mark-attention (beg end spec)
   "Fill BEG to END while the row SPEC describes is pulsing for the user.
-SPEC is a row as `herdr-panel-insert-entry' takes it, of which
-`:status' chooses the colour of the fill and `:id' says which row is
-pulsing.
+SPEC is a row as `herdr-panel-insert-entry' takes it.  Three of its
+fields decide the fill: `:status' chooses the colour, `:id' says which
+row is pulsing, and `:emphasis' keeps a row this Emacs has no buffer
+for from flashing at somebody who cannot see it.
 
 Over whatever is already there, so that the fill outranks the one on
 the current row.  A fill carries no foreground, so every field
 underneath it keeps its own colour, a dimmed row included."
-  (when-let* (((herdr-panel-attention-pulsing-p (plist-get spec :id)))
+  (when-let* (((not (eq (plist-get spec :emphasis) 'closed)))
+              ((herdr-panel-attention-pulsing-p (plist-get spec :id)))
               (face (herdr-panel-attention-face (plist-get spec :status))))
     (herdr-panel--add-face beg end face 'over)))
 
@@ -422,7 +424,7 @@ The status colours the mark, and it keeps that colour on a closed
 entry: an agent that wants the user wants them whether or not they
 happen to have opened it.  A status named in
 `herdr-panel-attention-faces' fills the whole row as well, for the few
-moments it pulses."
+moments it pulses, and only where a buffer here mirrors the row."
   (let* ((emphasis (plist-get spec :emphasis))
          (status (plist-get spec :status))
          (detail (plist-get spec :detail))
