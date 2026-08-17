@@ -142,6 +142,43 @@ it is supposed to kill."
    (current-buffer)
    (json-parse-string line :false-object nil :null-object nil)))
 
+;;; Buffer Names
+
+(ert-deftest herdr-term--buffer-name:starts-with-the-agent-title ()
+  "Buffer lists distinguish terminals by task before opaque pane id."
+  (let ((herdr-session--snapshot
+         (json-parse-string
+          (json-serialize
+           '(:agents
+             [(:pane_id "w1:p1" :name "fix-agent-rows"
+               :agent "codex")])))))
+    (should (equal (herdr-term--buffer-name "w1:p1")
+                   "*herdr:fix-agent-rows [w1:p1]*"))))
+
+(ert-deftest herdr-term--buffer-name:falls-back-to-the-pane ()
+  "A pane with no agent metadata keeps the stable historical name."
+  (let ((herdr-session--snapshot nil))
+    (should (equal (herdr-term--buffer-name "w1:p1")
+                   "*herdr:w1:p1*"))))
+
+(ert-deftest herdr-term--rename-buffers:follows-a-new-title ()
+  "An open terminal adopts a title changed after it was opened."
+  (let ((buffer (generate-new-buffer "*herdr:w1:p1*"))
+        (herdr-session--snapshot
+         (json-parse-string
+          (json-serialize
+           '(:agents
+             [(:pane_id "w1:p1" :name "renamed-task"
+               :agent "codex")])))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (setq herdr-term--pane "w1:p1"))
+          (herdr-term--rename-buffers)
+          (should (equal (buffer-name buffer)
+                         "*herdr:renamed-task [w1:p1]*")))
+      (kill-buffer buffer))))
+
 ;;; Stream Framing
 
 (ert-deftest herdr-term--filter:buffers-partial-line ()

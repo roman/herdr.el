@@ -317,19 +317,19 @@ them is, because that is the one taking what is typed."
 
 (defun herdr-spaces--detail (workspace)
   "Return the lines that follow WORKSPACE's name.
-Where it sits, then what git makes of it.  The directory is where the
-name comes from and what tells two checkouts of the same basename
-apart; the branch and the counts are what herdr shows on a space and
-does not put on the wire."
+Where it sits comes first, then what git makes of it.  Agent identity
+and task titles belong to the Agents panel."
   (let* ((directory (herdr-spaces--directory workspace))
          (separator (herdr-panel-text (concat " " herdr-spaces-separator " ")
                                       'herdr-panel-separator)))
     (list (string-join
            (delq nil
-                 (list (and directory
-                            (herdr-panel-text (abbreviate-file-name directory)
-                                              'herdr-panel-path))
-                       (herdr-spaces--windows workspace)))
+                 (list
+                  (and directory
+                       (herdr-panel-text
+                        (abbreviate-file-name directory)
+                        'herdr-panel-path))
+                  (herdr-spaces--windows workspace)))
            separator)
           (string-join
            (delq nil (list (herdr-spaces--git directory)

@@ -469,24 +469,56 @@ moments it pulses, and only where a buffer here mirrors the row."
     (herdr-panel-mark-attention start (point) spec)))
 
 (defun herdr-panel-entry-line (spec)
-  "Return SPEC drawn as one line, for offering a row in the minibuffer.
+  "Return SPEC drawn as one line, with completion fields recorded.
 Drawn by `herdr-panel-insert-entry' and then folded onto one line,
 rather than drawn a second way, so that a row offered by name is the
 row the panel draws and stays that way.  What a panel puts on lines of
 its own comes up onto the end of the name here, because a candidate is
 one line and because those lines hold much of what a reader types to
 pick one: the directory, the title an agent gave itself.  A row has
-nothing to indent against in a prompt, so `:indent' is dropped."
+nothing to indent against in a prompt, so `:indent' is dropped.  The
+recorded fields let `herdr-panel-read-pane' arrange entries as a table
+without inferring boundaries from spaces in their text."
   (with-temp-buffer
     (herdr-panel-insert-entry (append '(:indent "") spec))
-    (goto-char (point-min))
-    ;; Carrying the newline's own properties, which is what keeps the
-    ;; fill under a current row unbroken across the join.
-    (while (re-search-forward "\n *" nil t)
-      (replace-match (apply #'propertize "  "
-                            (text-properties-at (match-beginning 0)))
-                     t t))
-    (string-trim-right (buffer-string))))
+    (let* ((status-length
+            (length (herdr-panel-status-string
+                     (plist-get spec :status))))
+           (label-length (length (plist-get spec :label)))
+           (aside (plist-get spec :aside))
+           (aside-length (if aside (length aside) 0))
+           (status-start (point-min))
+           (status-end (+ status-start status-length))
+           (label-start (1+ status-end))
+           (label-end (+ label-start label-length))
+           (aside-start (1+ label-end))
+           (fields
+            (list :status (buffer-substring status-start status-end)
+                  :label (buffer-substring label-start label-end)
+                  :aside (if (> aside-length 0)
+                             (buffer-substring
+                              aside-start (+ aside-start aside-length))
+                           "")
+                  :details nil)))
+      (goto-char (point-min))
+      (forward-line 1)
+      (let (details)
+        (while (not (eobp))
+          (let ((start (+ (line-beginning-position) 2))
+                (end (line-end-position)))
+            (when (< start end)
+              (push (buffer-substring start end) details)))
+          (forward-line 1))
+        (plist-put fields :details (nreverse details)))
+      (goto-char (point-min))
+      (while (re-search-forward "\n *" nil t)
+        (replace-match (apply #'propertize "  "
+                              (text-properties-at (match-beginning 0)))
+                       t t))
+      (let ((line (string-trim-right (buffer-string))))
+        (put-text-property 0 (length line)
+                           'herdr-panel-completion-fields fields line)
+        line))))
 
 (defun herdr-panel-open-panes ()
   "Return the panes some Emacs buffer is mirroring, in no order."
@@ -732,6 +764,14 @@ A prefix argument to `herdr-panel-visit' asks for the other one."
   :type '(choice (const :tag "Take control" control)
                  (const :tag "Observe only" observe)))
 
+(defcustom herdr-panel-visit-title-width 92
+  "Maximum display width of a session title in visit completion.
+Shorter titles are padded to form a column, while longer titles are
+truncated with an ellipsis."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'natnum)
+
 (defvar-local herdr-panel-pane-function nil
   "Function returning the pane the row at point stands for.
 It may signal a `user-error' when the row stands for none.")
@@ -966,14 +1006,109 @@ ROWS is a list of (LINE . PANE), each LINE built by
 `herdr-panel-entry-line'.  They are offered in the order given rather
 than sorted, because a panel has already put whatever wants attention
 at the top of it."
-  (let ((rows (herdr-panel--distinct rows)))
-    (or (cdr (assoc (completing-read prompt (herdr-panel--table rows) nil t)
+  (let ((rows (herdr-panel--distinct
+               (herdr-panel--format-completion-rows rows))))
+    (or (cdr (assoc (completing-read
+                     prompt (herdr-panel--table rows) nil t)
                     rows))
         ;; `completing-read' lets the empty string out however much a
         ;; match is required of everything else, so a prompt answered
         ;; with nothing has to be refused here rather than carried on
         ;; with as a pane that does not exist.
         (user-error "No row of that name"))))
+
+(defun herdr-panel--format-completion-rows (rows)
+  "Return ROWS arranged into aligned completion columns.
+Rows not built by `herdr-panel-entry-line' are returned unchanged, so
+the public reader remains compatible with callers supplying plain
+completion strings."
+  (if (and rows
+           (seq-every-p
+            (lambda (row)
+              (get-text-property
+               0 'herdr-panel-completion-fields (car row)))
+            rows))
+      (let* ((columns (mapcar
+                       (lambda (row)
+                         (herdr-panel--completion-columns (car row)))
+                       rows))
+             (widths (herdr-panel--completion-widths columns)))
+        (seq-mapn
+         (lambda (row columns)
+           (cons (herdr-panel--format-completion-columns columns widths)
+                 (cdr row)))
+         rows columns))
+    rows))
+
+(defun herdr-panel--completion-columns (line)
+  "Return the completion columns recorded on LINE."
+  (let* ((fields
+          (get-text-property 0 'herdr-panel-completion-fields line))
+         (details (plist-get fields :details))
+         titles locations repositories)
+    (dolist (detail details)
+      (cond
+        ((herdr-panel--text-has-face-p
+          detail
+          '(herdr-panel-branch herdr-panel-ahead
+            herdr-panel-behind herdr-panel-dirty))
+         (push detail repositories))
+        ((herdr-panel--text-has-face-p
+          detail '(herdr-panel-path herdr-panel-window))
+         (push detail locations))
+        (t
+         (push detail titles))))
+    (list (plist-get fields :status)
+          (plist-get fields :label)
+          (plist-get fields :aside)
+          (herdr-panel--join-fields (nreverse titles))
+          (herdr-panel--join-fields (nreverse locations))
+          (herdr-panel--join-fields (nreverse repositories)))))
+
+(defun herdr-panel--join-fields (fields)
+  "Join completion FIELDS while preserving their text properties."
+  (string-join fields
+               (herdr-panel-text "  " 'herdr-panel-separator)))
+
+(defun herdr-panel--text-has-face-p (text faces)
+  "Return non-nil when TEXT wears any face in FACES."
+  (let ((position 0)
+        found)
+    (while (and (< position (length text)) (not found))
+      (dolist (property '(face font-lock-face))
+        (when (seq-intersection
+               (ensure-list (get-text-property position property text))
+               faces)
+          (setq found t)))
+      (setq position
+            (next-property-change position text (length text))))
+    found))
+
+(defun herdr-panel--completion-widths (rows)
+  "Return display widths for the columns in completion ROWS."
+  (let ((widths (make-list (length (car rows)) 0)))
+    (dolist (row rows)
+      (setq widths
+            (seq-mapn #'max widths (mapcar #'string-width row))))
+    (setf (nth 3 widths)
+          (min herdr-panel-visit-title-width (nth 3 widths)))
+    widths))
+
+(defun herdr-panel--format-completion-columns (columns widths)
+  "Format COLUMNS to WIDTHS, omitting columns empty in every row."
+  (let* ((active
+          (seq-filter (lambda (index) (> (nth index widths) 0))
+                      (number-sequence 0 (1- (length columns)))))
+         (last (car (last active)))
+         result)
+    (dolist (index active)
+      (let ((column (nth index columns))
+            (width (nth index widths)))
+        (push (truncate-string-to-width
+               column width 0 (and (/= index last) ?\s) "…")
+              result)))
+    (string-join (nreverse result)
+                 (herdr-panel-text "  " 'herdr-panel-separator))))
 
 (defun herdr-panel--table (rows)
   "Return a completion table over ROWS that does not reorder them."

@@ -27,6 +27,9 @@
 ;; matters here is that the prompt follows the grouped order, because that
 ;; is the order the column is read in.
 
+;; Spaces describe workspaces, while agent identity and task titles belong
+;; to the Agents panel.  These tests keep that boundary explicit.
+
 ;;; Code:
 
 (require 'ert)
@@ -208,6 +211,47 @@ nobody opened in this Emacs is not in it."
                           (herdr-spaces-tests--fill-at "repo-a")))
         (should-not (memq 'herdr-panel-attention-blocked
                           (herdr-spaces-tests--fill-at "fix")))))))
+
+(defun herdr-spaces-tests--snapshot ()
+  "Return a workspace snapshot containing a named agent."
+  (list
+   :workspaces
+   (vector (list :workspace_id "w1" :label "project"
+                 :active_tab_id "w1:t1" :tab_count 1 :pane_count 1
+                 :agent_status "working"))
+   :tabs
+   (vector (list :tab_id "w1:t1" :workspace_id "w1"
+                 :label "1" :agent_status "working"))
+   :panes
+   (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                 :tab_id "w1:t1" :cwd "/tmp/project"
+                 :agent_status "working"))
+   :agents
+   (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                 :tab_id "w1:t1" :agent "codex"
+                 :agent_status "working" :name "fix agent rows"))))
+
+(defun herdr-spaces-tests--plain (strings)
+  "Return STRINGS without text properties."
+  (mapcar #'substring-no-properties strings))
+
+;;; Workspace Context
+
+(ert-deftest herdr-spaces--entry:omits-agent-context ()
+  "A workspace row excludes the agent kind and session title."
+  (let ((herdr-spaces-git nil))
+    (herdr-session-with-snapshot (herdr-spaces-tests--snapshot)
+      (let* ((workspace (car (herdr-session-workspaces)))
+             (entry (herdr-spaces--entry workspace nil))
+             (line (herdr-panel-entry-line entry))
+             (columns (herdr-panel--completion-columns line)))
+        (should (null (plist-get entry :aside)))
+        (should (equal (herdr-spaces-tests--plain
+                        (plist-get entry :detail))
+                       '("/tmp/project" "")))
+        (should (equal (herdr-spaces-tests--plain columns)
+                       '("●" "project" "" ""
+                         "/tmp/project" "")))))))
 
 ;;; _
 (provide 'herdr-spaces-tests)

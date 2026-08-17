@@ -296,6 +296,62 @@ to the same thing."
                    "claude"))
     (should (null (herdr-session-agent "w9:p9")))))
 
+(ert-deftest herdr-session-agent-title:reads-a-codex-rename ()
+  "A Codex `/rename' value replaces its project-only terminal title."
+  (let ((file (make-temp-file "herdr-codex-index-"))
+        (herdr-session--codex-index-cache nil))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert
+             "{\"id\":\"session-1\",\"thread_name\":\"fix agent rows\"}\n"))
+          (let ((herdr-session-codex-index-file file)
+                (agent
+                 (json-parse-string
+                  (json-serialize
+                   '(:pane_id "w1:p1"
+                     :agent "codex"
+                     :terminal_title_stripped "project"
+                     :agent_session
+                     (:agent "codex" :kind "id"
+                      :source "herdr:codex" :value "session-1"))))))
+            (should (equal (herdr-session-agent-title agent)
+                           "fix agent rows"))))
+      (delete-file file))))
+
+(ert-deftest herdr-session-agent-title:prefers-a-herdr-name ()
+  "An explicit herdr name wins over an agent-specific title."
+  (let ((herdr-session-codex-index-file nil)
+        (agent
+         (json-parse-string
+          (json-serialize
+           '(:pane_id "w1:p1" :name "reviewer" :agent "codex"
+             :terminal_title_stripped "project")))))
+    (should (equal (herdr-session-agent-title agent) "reviewer"))))
+
+(ert-deftest herdr-session-agent-title:ignores-an-unnamed-pane-id ()
+  "Herdr's pane-id fallback is not presented as an assigned name."
+  (let ((agent
+         (json-parse-string
+          (json-serialize
+           '(:pane_id "w1:p1" :name "w1:p1" :agent "claude"
+             :terminal_title_stripped "renamed task")))))
+    (should (equal (herdr-session-agent-title agent) "renamed task"))))
+
+(ert-deftest herdr-session-agent-title:survives-a-malformed-index-line ()
+  "An interrupted Codex index write does not hide later valid names."
+  (let ((file (make-temp-file "herdr-codex-index-")))
+    (unwind-protect
+        (progn
+          (with-temp-file file
+            (insert "{broken\n"
+                    "[]\n"
+                    "{\"id\":\"good\",\"thread_name\":\"usable\"}\n"))
+          (should (equal (gethash "good"
+                                  (herdr-session--read-codex-index file))
+                         "usable")))
+      (delete-file file))))
+
 (ert-deftest herdr-session-reading:tolerates-an-empty-tree ()
   "Every reader answers before the first snapshot has arrived."
   (let ((herdr-session--snapshot nil))

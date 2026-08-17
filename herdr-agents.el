@@ -212,7 +212,7 @@ rather than the other way round."
         :id (gethash "pane_id" agent)
         :label (herdr-agents--where agent)
         :aside (herdr-agents--kind agent)
-        :detail (gethash "terminal_title_stripped" agent)))
+        :detail (herdr-agents--detail agent)))
 
 (defun herdr-agents--insert (agent current)
   "Insert an entry for AGENT, emphasised against the CURRENT pane."
@@ -223,10 +223,7 @@ rather than the other way round."
   "Return where AGENT is: its workspace, and its window within it.
 The window is left out when the workspace holds only one, where it
 would be a number that never changes and never distinguishes."
-  (let* ((workspace (herdr-session-workspace (gethash "workspace_id" agent)))
-         (name (if workspace
-                   (gethash "label" workspace)
-                 (gethash "workspace_id" agent)))
+  (let* ((name (herdr-agents--workspace-name agent))
          (tab (herdr-agents--tab agent)))
     (if tab
         (concat name
@@ -234,6 +231,14 @@ would be a number that never changes and never distinguishes."
                                   'herdr-panel-separator)
                 (herdr-panel-text tab 'herdr-panel-window))
       name)))
+
+(defun herdr-agents--workspace-name (agent)
+  "Return the workspace name for AGENT."
+  (let ((workspace
+         (herdr-session-workspace (gethash "workspace_id" agent))))
+    (if workspace
+        (gethash "label" workspace)
+      (gethash "workspace_id" agent))))
 
 (defun herdr-agents--tab (agent)
   "Return the name of the window AGENT sits in, or nil when it is alone."
@@ -255,14 +260,11 @@ See `herdr-agents-icons' for which kinds have a glyph."
                       (or (cdr (assoc kind herdr-agents-icon-faces))
                           'herdr-panel-agent))))
 
-(defun herdr-agents--name (agent)
-  "Return what to call AGENT.
-A name the user gave it wins, then the kind herdr chose to display,
-then the kind it detected, and failing all of those its pane."
-  (or (gethash "name" agent)
-      (gethash "display_agent" agent)
-      (gethash "agent" agent)
-      (gethash "pane_id" agent)))
+(defun herdr-agents--detail (agent)
+  "Return AGENT's title unless it repeats the workspace name."
+  (let ((title (herdr-session-agent-title agent)))
+    (unless (equal title (herdr-agents--workspace-name agent))
+      title)))
 
 (defun herdr-agents--pane-at-point ()
   "Return the pane of the row at point, or signal when there is none."

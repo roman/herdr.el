@@ -68,6 +68,7 @@
 (require 'seq)
 
 (require 'herdr-api)
+(require 'herdr-session)
 
 ;;; Options
 
@@ -253,13 +254,17 @@ buffer, because re-initializing would tear down a working terminal."
   (interactive
    (list (herdr-term--read-pane "Open pane: ") current-prefix-arg))
   (ghostel--load-module t)
-  (let* ((name (format "*herdr:%s*" pane))
-         (existing (get-buffer name)))
+  (let* ((name (herdr-term--buffer-name pane))
+         (existing (herdr-term--buffer pane)))
+    (when (and existing (not (equal (buffer-name existing) name)))
+      (with-current-buffer existing
+        (rename-buffer name t)))
     (if (and existing
              (process-live-p
               (buffer-local-value 'herdr-term--process existing)))
         (pop-to-buffer existing)
-      (herdr-term--setup (get-buffer-create name) pane writable))))
+      (herdr-term--setup (or existing (get-buffer-create name))
+                         pane writable))))
 
 ;;;###autoload
 (defun herdr-term-new (&optional cwd)
@@ -381,6 +386,35 @@ as resync and close, as opposed to keys that are forwarded to the pane."
   :interactive nil)
 
 ;;; Setup and Teardown
+
+(defun herdr-term--buffer (pane)
+  "Return the terminal buffer mirroring PANE, or nil."
+  (seq-find (lambda (buffer)
+              (and (buffer-live-p buffer)
+                   (equal (buffer-local-value 'herdr-term--pane buffer)
+                          pane)))
+            (buffer-list)))
+
+(defun herdr-term--buffer-name (pane)
+  "Return the terminal buffer name for PANE.
+Put the agent title first so buffer lists distinguish work at a
+glance, and retain PANE to keep equal titles unambiguous."
+  (if-let* ((agent (herdr-session-agent pane))
+            (title (herdr-session-agent-title agent)))
+      (format "*herdr:%s [%s]*" title pane)
+    (format "*herdr:%s*" pane)))
+
+(defun herdr-term--rename-buffers ()
+  "Update terminal buffer names from the current session titles."
+  (dolist (buffer (buffer-list))
+    (when-let* ((pane (and (buffer-live-p buffer)
+                           (buffer-local-value 'herdr-term--pane buffer))))
+      (let ((name (herdr-term--buffer-name pane)))
+        (unless (equal (buffer-name buffer) name)
+          (with-current-buffer buffer
+            (rename-buffer name t)))))))
+
+(add-hook 'herdr-session-change-hook #'herdr-term--rename-buffers)
 
 (defun herdr-term--setup (buffer pane writable)
   "Display BUFFER, attach it to herdr PANE and start its stream.

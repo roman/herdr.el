@@ -47,7 +47,9 @@
 
 ;;; Code:
 
+(require 'json)
 (require 'seq)
+(require 'subr-x)
 
 (require 'herdr-api)
 
@@ -81,6 +83,19 @@ listen to events alone."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-session
   :type '(choice (const :tag "Do not poll" nil) number))
+
+(defcustom herdr-session-codex-index-file
+  (expand-file-name
+   "session_index.jsonl"
+   (expand-file-name (or (getenv "CODEX_HOME") "~/.codex")))
+  "File where Codex records session names set by `/rename'.
+The agent snapshot identifies a Codex session but does not carry this
+name, so the session model joins the two by identifier.  Nil disables
+the lookup.  Changes are noticed by the ordinary session poll."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-session
+  :type '(choice (const :tag "Do not read Codex session names" nil)
+                 file))
 
 (defcustom herdr-session-events
   '("workspace.created" "workspace.updated" "workspace.renamed"
@@ -130,6 +145,10 @@ filter, so a function on it may call the herdr API.")
 
 (defvar herdr-session--closed-reason nil
   "Why the event subscription ended, or nil while it is healthy.")
+
+(defvar herdr-session--codex-index-cache nil
+  "Cached Codex names as (FILE MODIFICATION-TIME NAMES).
+NAMES is a hash table keyed by Codex session identifier.")
 
 ;;; Lifecycle
 
@@ -209,7 +228,7 @@ and scroll positions does not count as a change."
                   (list (gethash "pane_id" agent)
                         (gethash "agent" agent)
                         (herdr-session-status agent)
-                        (gethash "terminal_title_stripped" agent)
+                        (herdr-session-agent-title agent)
                         (gethash "focused" agent)))
                 (herdr-session-agents))
         (mapcar (lambda (pane)
@@ -291,6 +310,80 @@ once an interval for as long as Emacs runs."
   "Return the agent running in PANE-ID, or nil."
   (seq-find (lambda (agent) (equal (gethash "pane_id" agent) pane-id))
             (herdr-session-agents)))
+
+(defun herdr-session-agent-title (agent)
+  "Return the user-facing title of AGENT, or nil.
+A name assigned through herdr wins.  Codex names are joined from its
+local session index because its terminal title only reports the
+project.  Other agents use their stripped terminal title."
+  (let ((pane (gethash "pane_id" agent))
+        (name (gethash "name" agent)))
+    (or (and (stringp name)
+             (not (string-empty-p name))
+             (not (equal name pane))
+             name)
+        (herdr-session--codex-title agent)
+        (when-let* ((title (gethash "terminal_title_stripped" agent))
+                    ((stringp title))
+                    ((not (string-empty-p title))))
+          title))))
+
+(defun herdr-session--codex-title (agent)
+  "Return AGENT's Codex session title, or nil."
+  (when (equal (gethash "agent" agent) "codex")
+    (when-let* ((session (gethash "agent_session" agent))
+                ((hash-table-p session))
+                (id (gethash "value" session))
+                ((stringp id)))
+      (gethash id (herdr-session--codex-index)))))
+
+(defun herdr-session--codex-index ()
+  "Return Codex session names keyed by identifier.
+Cache the parsed index until its modification time or configured path
+changes.  A missing or unreadable index is an empty one because Codex
+is an optional peer, not a requirement of the session model."
+  (let* ((file herdr-session-codex-index-file)
+         (attributes (and file
+                          (file-readable-p file)
+                          (file-attributes file 'string)))
+         (modified (and attributes
+                        (file-attribute-modification-time attributes))))
+    (unless (and herdr-session--codex-index-cache
+                 (equal file (nth 0 herdr-session--codex-index-cache))
+                 (equal modified
+                        (nth 1 herdr-session--codex-index-cache)))
+      (setq herdr-session--codex-index-cache
+            (list file modified
+                  (if modified
+                      (herdr-session--read-codex-index file)
+                    (make-hash-table :test #'equal)))))
+    (nth 2 herdr-session--codex-index-cache)))
+
+(defun herdr-session--read-codex-index (file)
+  "Return the session names recorded in Codex index FILE.
+Malformed lines are ignored so that one interrupted write does not
+make every agent lose its fallback title."
+  (let ((names (make-hash-table :test #'equal)))
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents file)
+          (while (not (eobp))
+            (let ((line (buffer-substring-no-properties
+                         (line-beginning-position) (line-end-position))))
+              (unless (string-empty-p line)
+                (condition-case nil
+                    (let ((entry (json-parse-string line)))
+                      (when (hash-table-p entry)
+                        (when-let* ((id (gethash "id" entry))
+                                    (name (gethash "thread_name" entry))
+                                    ((stringp id))
+                                    ((stringp name))
+                                    ((not (string-empty-p name))))
+                          (puthash id name names))))
+                  (json-parse-error nil))))
+            (forward-line 1)))
+      (file-error nil))
+    names))
 
 (defun herdr-session-workspace (workspace-id)
   "Return the workspace called WORKSPACE-ID, or nil."

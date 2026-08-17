@@ -670,6 +670,95 @@ Both ask here, so the prefix argument means one thing in both."
     (should (eq (herdr-panel-access nil) 'observe))
     (should (eq (herdr-panel-access t) 'control))))
 
+;;; Completion Tables
+
+(defun herdr-panel-tests--row (label aside details pane)
+  "Return a completion row with LABEL, ASIDE, DETAILS and PANE."
+  (cons
+   (herdr-panel-entry-line
+    (list :status "working" :emphasis 'closed
+          :label label :aside aside :detail details))
+   pane))
+
+(defun herdr-panel-tests--plain-rows (rows)
+  "Return the lines in completion ROWS without text properties."
+  (mapcar (lambda (row) (substring-no-properties (car row))) rows))
+
+(ert-deftest herdr-panel--format-completion-rows:bounds-titles ()
+  "Session titles are truncated to the configured display width."
+  (let* ((herdr-panel-visit-title-width 8)
+         (rows
+          (list (herdr-panel-tests--row
+                 "project" "codex" '("a title longer than eight") "p1")))
+         (formatted (herdr-panel--format-completion-rows rows)))
+    (should (equal (herdr-panel-tests--plain-rows formatted)
+                   '("●  project  codex  a title…")))))
+
+(ert-deftest herdr-panel--format-completion-rows:aligns-columns ()
+  "Short titles are padded so following workspace fields align."
+  (let* ((path (herdr-panel-text "/tmp/project" 'herdr-panel-path))
+         (git (herdr-panel-text "main *2" 'herdr-panel-branch))
+         (rows
+          (list
+           (herdr-panel-tests--row
+            "project" "codex" (list "short" path git) "p1")
+           (herdr-panel-tests--row
+            "project" "codex" (list "a longer title" path git) "p2")))
+         (formatted (herdr-panel--format-completion-rows rows))
+         (lines (herdr-panel-tests--plain-rows formatted)))
+    (should (= (string-match (regexp-quote "/tmp/project") (car lines))
+               (string-match (regexp-quote "/tmp/project") (cadr lines))))))
+
+(ert-deftest herdr-panel--format-completion-rows:aligns-shell-workspaces ()
+  "A shell-only workspace reserves the session-title column."
+  (let* ((path (herdr-panel-text "/tmp/project" 'herdr-panel-path))
+         (rows
+          (list
+           (herdr-panel-tests--row
+            "project" "codex" (list "agent task" path) "p1")
+           (herdr-panel-tests--row
+            "project" nil (list path) "p2")))
+         (formatted (herdr-panel--format-completion-rows rows))
+         (lines (herdr-panel-tests--plain-rows formatted)))
+    (should (= (string-match (regexp-quote "/tmp/project") (car lines))
+               (string-match (regexp-quote "/tmp/project") (cadr lines))))))
+
+(ert-deftest herdr-panel--format-completion-rows:uses-display-width ()
+  "Wide characters consume their rendered width in the title column."
+  (let* ((herdr-panel-visit-title-width 5)
+         (path (herdr-panel-text "/tmp/project" 'herdr-panel-path))
+         (rows
+          (list
+           (herdr-panel-tests--row
+            "project" "codex" (list "界界界" path) "p1")
+           (herdr-panel-tests--row
+            "project" "codex" (list "x" path) "p2")))
+         (formatted (herdr-panel--format-completion-rows rows))
+         (lines (herdr-panel-tests--plain-rows formatted)))
+    (should (string-match-p (regexp-quote "界界…") (car lines)))
+    (should
+     (= (string-width
+         (substring (car lines) 0 (string-match "/tmp/project" (car lines))))
+        (string-width
+         (substring (cadr lines) 0
+                    (string-match "/tmp/project" (cadr lines))))))))
+
+(ert-deftest herdr-panel--distinct:separates-truncated-titles ()
+  "Titles that truncate alike still select their own panes."
+  (let* ((herdr-panel-visit-title-width 5)
+         (rows
+          (list
+           (herdr-panel-tests--row
+            "project" "codex" '("same prefix one") "p1")
+           (herdr-panel-tests--row
+            "project" "codex" '("same prefix two") "p2")))
+         (formatted
+          (herdr-panel--distinct
+           (herdr-panel--format-completion-rows rows))))
+    (should (equal (herdr-panel-tests--plain-rows formatted)
+                   '("●  project  codex  same… p1"
+                     "●  project  codex  same… p2")))))
+
 ;;; _
 (provide 'herdr-panel-tests)
 ;; Local Variables:

@@ -129,6 +129,34 @@ exists to raise."
     (herdr-panel-tests-offline
       (should-error (herdr-agents--read) :type 'user-error))))
 
+;;; Titles
+
+(ert-deftest herdr-agents--detail:shows-an-agent-title ()
+  "The task title distinguishes agents sharing one workspace."
+  (herdr-session-with-snapshot
+      (list :workspaces
+            (vector (list :workspace_id "w1" :label "project"))
+            :agents
+            (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                          :agent "claude" :agent_status "working"
+                          :terminal_title_stripped "fix agent rows")))
+    (should (equal (herdr-agents--detail
+                    (car (herdr-session-agents)))
+                   "fix agent rows"))))
+
+(ert-deftest herdr-agents--detail:omits-the-workspace-name ()
+  "A project-only terminal title is not repeated on a second line."
+  (herdr-session-with-snapshot
+      (list :workspaces
+            (vector (list :workspace_id "w1" :label "project"))
+            :agents
+            (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                          :agent "codex" :agent_status "working"
+                          :terminal_title_stripped "project")))
+    (let ((herdr-session-codex-index-file nil))
+      (should (null (herdr-agents--detail
+                     (car (herdr-session-agents))))))))
+
 ;;; _
 (provide 'herdr-agents-tests)
 ;; Local Variables:
