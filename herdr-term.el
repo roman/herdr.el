@@ -416,19 +416,23 @@ glance, and retain PANE to keep equal titles unambiguous."
 
 (add-hook 'herdr-session-change-hook #'herdr-term--rename-buffers)
 
+(defun herdr-term--update-directory (buffer pane-id)
+  "Update BUFFER's directory from PANE-ID in the current session tree."
+  (when-let* ((pane (herdr-session-pane pane-id))
+              (directory (gethash "cwd" pane))
+              ((stringp directory))
+              ((file-directory-p directory)))
+    (with-current-buffer buffer
+      (setq default-directory (file-name-as-directory directory)
+            list-buffers-directory default-directory))))
+
 (defun herdr-term--update-directories ()
   "Update terminal buffer directories from the current session tree."
   (dolist (buffer (buffer-list))
     (when-let* ((pane-id
                  (and (buffer-live-p buffer)
-                      (buffer-local-value 'herdr-term--pane buffer)))
-                (pane (herdr-session-pane pane-id))
-                (directory (gethash "cwd" pane))
-                ((stringp directory))
-                ((file-directory-p directory)))
-      (with-current-buffer buffer
-        (setq default-directory (file-name-as-directory directory)
-              list-buffers-directory default-directory)))))
+                      (buffer-local-value 'herdr-term--pane buffer))))
+      (herdr-term--update-directory buffer pane-id))))
 
 (add-hook 'herdr-session-change-hook #'herdr-term--update-directories)
 
@@ -458,6 +462,7 @@ herdr's authoritative ones."
             herdr-term--last-seq nil
             herdr-term--last-reconnect nil
             herdr-term--fail-count 0)
+      (herdr-term--update-directory buffer pane)
       (herdr-term--reset-term rows cols)
       (herdr-term-command-mode 1)
       (add-hook 'window-size-change-functions #'herdr-term--note-resize nil t)

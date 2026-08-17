@@ -204,6 +204,40 @@ it is supposed to kill."
       (kill-buffer buffer)
       (delete-directory directory))))
 
+(ert-deftest herdr-term--setup:adopts-a-known-pane-cwd ()
+  "Opening an existing pane starts in the directory Herdr reports."
+  (let ((buffer (generate-new-buffer " *herdr-setup-directory-test*"))
+        (directory (make-temp-file "herdr-term-setup-directory-" t)))
+    (unwind-protect
+        (let ((herdr-session--snapshot
+               (json-parse-string
+                (json-serialize
+                 (list :panes
+                       (vector (list :pane_id "w1:p1"
+                                     :cwd directory)))))))
+          (with-current-buffer buffer
+            (setq default-directory user-emacs-directory
+                  list-buffers-directory user-emacs-directory))
+          (cl-letf (((symbol-function 'herdr-term--teardown) #'ignore)
+                    ((symbol-function 'ghostel-mode) #'ignore)
+                    ((symbol-function 'pop-to-buffer) #'ignore)
+                    ((symbol-function 'get-buffer-window) #'ignore)
+                    ((symbol-function 'herdr-term--reset-term) #'ignore)
+                    ((symbol-function 'herdr-term-command-mode) #'ignore)
+                    ((symbol-function 'herdr-term--start-stream) #'ignore))
+            (should (eq (herdr-term--setup buffer "w1:p1" nil)
+                        buffer)))
+          (with-current-buffer buffer
+            (should
+             (equal default-directory
+                    (file-name-as-directory directory)))
+            (should (equal list-buffers-directory
+                           default-directory))))
+      (with-current-buffer buffer
+        (remove-hook 'kill-buffer-hook #'herdr-term--teardown t))
+      (kill-buffer buffer)
+      (delete-directory directory))))
+
 ;;; Stream Framing
 
 (ert-deftest herdr-term--filter:buffers-partial-line ()
