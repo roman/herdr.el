@@ -416,6 +416,22 @@ glance, and retain PANE to keep equal titles unambiguous."
 
 (add-hook 'herdr-session-change-hook #'herdr-term--rename-buffers)
 
+(defun herdr-term--update-directories ()
+  "Update terminal buffer directories from the current session tree."
+  (dolist (buffer (buffer-list))
+    (when-let* ((pane-id
+                 (and (buffer-live-p buffer)
+                      (buffer-local-value 'herdr-term--pane buffer)))
+                (pane (herdr-session-pane pane-id))
+                (directory (gethash "cwd" pane))
+                ((stringp directory))
+                ((file-directory-p directory)))
+      (with-current-buffer buffer
+        (setq default-directory (file-name-as-directory directory)
+              list-buffers-directory default-directory)))))
+
+(add-hook 'herdr-session-change-hook #'herdr-term--update-directories)
+
 (defun herdr-term--setup (buffer pane writable)
   "Display BUFFER, attach it to herdr PANE and start its stream.
 WRITABLE selects the `control' stream over `observe'.  The grid is

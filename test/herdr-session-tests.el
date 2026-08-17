@@ -393,6 +393,7 @@ none of them change anything a panel shows."
          (herdr-session--fingerprint nil)
          (announcements 0)
          (status "idle")
+         (cwd "/tmp/one")
          (revision 0)
          (herdr-session-change-hook
           (list (lambda () (setq announcements (1+ announcements))))))
@@ -412,6 +413,7 @@ none of them change anything a panel shows."
                                (vector (list :pane_id "w1:p1"
                                              :agent_status status
                                              :focused t
+                                             :cwd cwd
                                              :revision revision)))))
                   :false-object nil :null-object nil))))
       (herdr-session-refresh)
@@ -422,9 +424,13 @@ none of them change anything a panel shows."
       (setq status "blocked")
       (herdr-session-refresh)
       (should (eql announcements 2))
+      ;; A terminal buffer consumes cwd even though no panel draws it.
+      (setq cwd "/tmp/two")
+      (herdr-session-refresh)
+      (should (eql announcements 3))
       ;; Forcing is how a panel that lost its buffer gets redrawn.
       (herdr-session-refresh t)
-      (should (eql announcements 3)))))
+      (should (eql announcements 4)))))
 
 (ert-deftest herdr-session-start:polls-for-what-events-omit ()
   "A poll runs alongside the events, because some changes have none.

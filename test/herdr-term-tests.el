@@ -179,6 +179,31 @@ it is supposed to kill."
                          "*herdr:renamed-task [w1:p1]*")))
       (kill-buffer buffer))))
 
+(ert-deftest herdr-term--update-directories:follows-the-pane-cwd ()
+  "An open terminal adopts its pane's current working directory."
+  (let ((buffer (generate-new-buffer " *herdr-directory-test*"))
+        (directory (make-temp-file "herdr-term-directory-" t)))
+    (unwind-protect
+        (let ((herdr-session--snapshot
+               (json-parse-string
+                (json-serialize
+                 (list :panes
+                       (vector (list :pane_id "w1:p1"
+                                     :cwd directory)))))))
+          (with-current-buffer buffer
+            (setq herdr-term--pane "w1:p1"
+                  default-directory user-emacs-directory
+                  list-buffers-directory user-emacs-directory))
+          (herdr-term--update-directories)
+          (with-current-buffer buffer
+            (should
+             (equal default-directory
+                    (file-name-as-directory directory)))
+            (should (equal list-buffers-directory
+                           default-directory))))
+      (kill-buffer buffer)
+      (delete-directory directory))))
+
 ;;; Stream Framing
 
 (ert-deftest herdr-term--filter:buffers-partial-line ()

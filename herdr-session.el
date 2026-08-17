@@ -125,14 +125,15 @@ something else to move.")
 
 (defvar herdr-session-change-hook nil
   "Hook run after the session tree changed.
-Panels add themselves here to redraw.  It runs outside any process
-filter, so a function on it may call the herdr API.")
+Consumers add themselves here to update from the new tree.  It runs
+outside any process filter, so a function on it may call the herdr
+API.")
 
 (defvar herdr-session--snapshot nil
   "The last snapshot hash-table, or nil before the first refresh.")
 
 (defvar herdr-session--fingerprint nil
-  "Fingerprint of the last snapshot the panels were told about.")
+  "Fingerprint of the last snapshot consumers were told about.")
 
 (defvar herdr-session--subscription nil
   "Process carrying the event subscription, or nil when stopped.")
@@ -190,10 +191,10 @@ after the server was restarted."
 
 (defun herdr-session-refresh (&optional force)
   "Replace the session tree with a fresh snapshot, then announce it.
-The announcement is skipped when nothing a panel would draw
-differently has changed, unless FORCE says otherwise.  A pane running
-an agent reports an event several times a second, and redrawing every
-panel that often is work no one sees.
+The announcement is skipped when no consumed field has changed,
+unless FORCE says otherwise.  A pane running an agent reports an event
+several times a second, and updating every consumer that often is work
+no one sees.
 
 This blocks, so it must not run from a process filter; see
 `herdr-session--note-event'."
@@ -208,9 +209,9 @@ This blocks, so it must not run from a process filter; see
   herdr-session--snapshot)
 
 (defun herdr-session--fingerprint ()
-  "Return what the panels draw, as a value that can be compared.
-Only the fields a panel renders take part, so the churn of revisions
-and scroll positions does not count as a change."
+  "Return the user-visible tree state as a value that can be compared.
+Only fields consumed by a panel or terminal buffer take part, so the
+churn of revisions and scroll positions does not count as a change."
   (list (mapcar (lambda (workspace)
                   (list (gethash "workspace_id" workspace)
                         (gethash "label" workspace)
@@ -234,7 +235,8 @@ and scroll positions does not count as a change."
         (mapcar (lambda (pane)
                   (list (gethash "pane_id" pane)
                         (herdr-session-status pane)
-                        (gethash "focused" pane)))
+                        (gethash "focused" pane)
+                        (gethash "cwd" pane)))
                 (herdr-session-panes))
         (mapcar #'funcall herdr-session-fingerprint-functions)))
 
