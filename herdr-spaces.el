@@ -164,8 +164,10 @@ be nothing to show for it."
         (let ((spaces (herdr-session-spaces))
               (current (herdr-spaces--current-workspace)))
           (if spaces
-              (dolist (space spaces)
-                (herdr-spaces--insert space current))
+              (herdr-panel-insert-items
+               spaces
+               (lambda (space)
+                 (herdr-spaces--insert space current)))
             (insert (propertize "  no spaces\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))

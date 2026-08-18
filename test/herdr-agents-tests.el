@@ -25,6 +25,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'ert)
 
 (require 'herdr-agents)
@@ -128,6 +129,30 @@ exists to raise."
   (herdr-session-with-snapshot (herdr-agents-tests--panes)
     (herdr-panel-tests-offline
       (should-error (herdr-agents--read) :type 'user-error))))
+
+;;; Spacing The List
+
+(ert-deftest herdr-agents-refresh:uses-the-shared-item-spacing ()
+  "Agent rows use the same leading and inter-entry gaps as other panels."
+  (let ((agents (list (herdr-agents-tests--agent
+                       "w1:p1" "claude" "working")
+                      (herdr-agents-tests--agent
+                       "w1:p2" "codex" "idle")))
+        (herdr-agents-buffer-name " *herdr-agents-spacing-test*")
+        received)
+    (unwind-protect
+        (cl-letf (((symbol-function 'herdr-agents--sorted)
+                   (lambda () agents))
+                  ((symbol-function 'herdr-panel-current-pane) #'ignore)
+                  ((symbol-function 'herdr-panel-insert-items)
+                   (lambda (items insert-function)
+                     (setq received items)
+                     (mapc insert-function items)))
+                  ((symbol-function 'herdr-agents--insert) #'ignore))
+          (herdr-agents-refresh)
+          (should (equal received agents)))
+      (when-let* ((buffer (get-buffer herdr-agents-buffer-name)))
+        (kill-buffer buffer)))))
 
 ;;; Titles
 

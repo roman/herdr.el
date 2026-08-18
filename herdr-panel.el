@@ -722,6 +722,18 @@ the variable below is declared here and given its value there, and
 
 ;;; Panels
 
+(defcustom herdr-panel-item-spacing 1
+  "Number of blank lines before and between top-level panel entries.
+The first gap separates the list from its heading.  Further gaps
+separate entries without splitting the detail lines or grouped
+children that belong to one entry.
+
+`herdr-panel-compact-mode' temporarily uses no gaps without changing
+this value."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'natnum)
+
 (defcustom herdr-panel-mode-line nil
   "Mode line for a panel buffer, or nil to give it none.
 A panel is a narrow column of short rows in a window that never
@@ -776,6 +788,17 @@ truncated with an ellipsis."
   "Function returning the pane the row at point stands for.
 It may signal a `user-error' when the row stands for none.")
 
+;;;###autoload
+(define-minor-mode herdr-panel-compact-mode
+  "Toggle compact spacing in every Herdr panel.
+Compact panels put the first entry directly below the heading and
+leave no blank lines between top-level entries.  Turning the mode off
+restores `herdr-panel-item-spacing'."
+  :init-value nil
+  :global t
+  :group 'herdr-panel
+  (herdr-panel-refresh-all))
+
 (defun herdr-panel-init (refresh pane)
   "Prepare the current buffer as a panel.
 REFRESH redraws it and PANE answers which pane the row at point
@@ -795,6 +818,22 @@ stands for."
     (herdr-panel-hide-cursor)
     (add-hook 'post-command-hook #'herdr-panel-track-point nil t))
   (add-hook 'kill-buffer-hook #'herdr-panel-unwatch nil t))
+
+(defun herdr-panel-insert-items (items insert-function)
+  "Insert top-level ITEMS using INSERT-FUNCTION.
+Roomy panels put `herdr-panel-item-spacing' blank lines before the
+first item and between the rest.  `herdr-panel-compact-mode' removes
+both kinds of gap.  INSERT-FUNCTION is called once with each item."
+  (let ((spacing (if herdr-panel-compact-mode
+                     0
+                   herdr-panel-item-spacing)))
+    (when items
+      (insert (make-string spacing ?\n))
+      (while items
+        (funcall insert-function (car items))
+        (setq items (cdr items))
+        (when items
+          (insert (make-string spacing ?\n)))))))
 
 ;;; The Row Point Rests On
 

@@ -180,8 +180,10 @@ prefix argument OTHER, open it the other way round from
         (let ((agents (herdr-agents--sorted))
               (current (herdr-panel-current-pane)))
           (if agents
-              (dolist (agent agents)
-                (herdr-agents--insert agent current))
+              (herdr-panel-insert-items
+               agents
+               (lambda (agent)
+                 (herdr-agents--insert agent current)))
             (insert (propertize "  no agents detected\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))

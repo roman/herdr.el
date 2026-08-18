@@ -224,6 +224,49 @@ that signals on `*scratch*' takes the command with it."
     (should (null (buffer-local-value 'herdr-panel-refresh-function
                                       buffer)))))
 
+;;; Spacing Panel Lists
+
+(ert-deftest herdr-panel-insert-items:pads-the-title-and-entries ()
+  "Roomy lists have space above the first item and between the rest."
+  (let ((herdr-panel-compact-mode nil)
+        (herdr-panel-item-spacing 1))
+    (with-temp-buffer
+      (insert "Title\n")
+      (herdr-panel-insert-items
+       '("one" "two" "three")
+       (lambda (item)
+         (insert item "\n")))
+      (should (equal (buffer-string)
+                     "Title\n\none\n\ntwo\n\nthree\n")))))
+
+(ert-deftest herdr-panel-insert-items:compacts-the-whole-list ()
+  "Compact lists have neither a leading nor an inter-entry gap."
+  (let ((herdr-panel-compact-mode t)
+        (herdr-panel-item-spacing 2))
+    (with-temp-buffer
+      (insert "Title\n")
+      (herdr-panel-insert-items
+       '("one" "two")
+       (lambda (item)
+         (insert item "\n")))
+      (should (equal (buffer-string) "Title\none\ntwo\n")))))
+
+(ert-deftest herdr-panel-compact-mode:refreshes-every-panel ()
+  "Changing density redraws all panels immediately."
+  (let ((original (default-value 'herdr-panel-compact-mode))
+        (refreshes 0))
+    (unwind-protect
+        (progn
+          (setq-default herdr-panel-compact-mode nil)
+          (cl-letf (((symbol-function 'herdr-panel-refresh-all)
+                     (lambda () (cl-incf refreshes))))
+            (herdr-panel-compact-mode 1)
+            (should herdr-panel-compact-mode)
+            (herdr-panel-compact-mode -1)
+            (should-not herdr-panel-compact-mode)
+            (should (eql refreshes 2))))
+      (setq-default herdr-panel-compact-mode original))))
+
 ;;; Drawing A Row On One Line
 
 (ert-deftest herdr-panel-entry-line:brings-the-detail-up-onto-the-line ()
