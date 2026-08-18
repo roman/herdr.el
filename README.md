@@ -314,11 +314,18 @@ In a terminal buffer:
 
 | Key                      | Command                                                      |
 |--------------------------|--------------------------------------------------------------|
+| `C-g`                    | `keyboard-quit`                                              |
+| `C-c C-g`                | `herdr-term-send-control-g` — send control-G to the pane     |
 | `C-c C-l`                | `herdr-term-resync` — reconnect for a fresh full frame       |
 | `C-c C-w`                | `herdr-term-take-control` — steal the keyboard for this pane |
 | `C-c C-k`                | `herdr-term-close`                                           |
 | `C-c C-e`                | `herdr-term-scroll-to-bottom`                                |
 | `S-<prior>` / `S-<next>` | page the scrollback                                          |
+
+A terminal buffer follows the pane's working directory, including after the
+program changes it. Emacs file commands therefore start from the directory
+shown by Herdr. `C-g` remains the Emacs quit key; `C-c C-g` sends the literal
+control-G byte to the program instead.
 
 The shifted page keys are what a terminal emulator conventionally uses for
 its own scrollback, which leaves the unshifted ones to reach the program

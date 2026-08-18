@@ -188,6 +188,8 @@ which makes it the record of whether that connection ever synced.")
 ;; program running in the pane.
 (defvar-keymap herdr-term-command-mode-map
   :doc "Keymap for `herdr-term-command-mode'."
+  "C-g" #'keyboard-quit
+  "C-c C-g" #'herdr-term-send-control-g
   "C-c C-l" #'herdr-term-resync
   "C-c C-k" #'herdr-term-close
   "C-c C-w" #'herdr-term-take-control
@@ -230,6 +232,10 @@ to evil, as the way back out of a terminal that has the keyboard.")
   (apply #'evil-define-minor-mode-key 'insert 'herdr-term-command-mode
          (mapcan (lambda (key) (list (kbd key) #'ghostel--send-event))
                  herdr-term-evil-passthrough-keys))
+  (evil-define-minor-mode-key 'insert 'herdr-term-command-mode
+                              (kbd "C-g") #'keyboard-quit
+                              (kbd "C-c C-g")
+                              #'herdr-term-send-control-g)
   (evil-define-minor-mode-key 'normal 'herdr-term-command-mode
                               "j" #'herdr-term-line-down
                               "k" #'herdr-term-line-up
@@ -290,6 +296,11 @@ directory when the current buffer is remote."
     (unless pane
       (user-error "Herdr created no pane for %s" directory))
     (herdr-term-open pane t)))
+
+(defun herdr-term-send-control-g ()
+  "Send a literal control-G byte to the program in the pane."
+  (interactive)
+  (herdr-term--send-input "\C-g"))
 
 (defun herdr-term-resync ()
   "Force a full-frame resync of the current buffer.

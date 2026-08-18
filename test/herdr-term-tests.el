@@ -506,6 +506,16 @@ before initial full frame\" for every frame that follows."
     (herdr-term--send-input "ls\r")
     (should (null herdr-term-test-sent))))
 
+(ert-deftest herdr-term-send-control-g:sends-literal-byte ()
+  "The prompt-editor command sends control-G to the pane."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--writable t)
+    (herdr-term-send-control-g)
+    (let* ((object (json-parse-string
+                    (string-trim-right (car herdr-term-test-sent))))
+           (bytes (base64-decode-string (gethash "bytes" object))))
+      (should (equal bytes "\C-g")))))
+
 ;;; Input Diversion
 
 (defvar herdr-term-test-diverted nil
@@ -1010,6 +1020,14 @@ likely has it and it competes for the same keys."
        (evil-change-state ,state)
        ,@body)))
 
+(ert-deftest herdr-term-command-mode:binds-control-g-actions ()
+  "The command map reserves control-G and exposes its prefixed form."
+  (with-temp-buffer
+    (herdr-term-command-mode 1)
+    (should (eq (key-binding (kbd "C-g")) #'keyboard-quit))
+    (should (eq (key-binding (kbd "C-c C-g"))
+                #'herdr-term-send-control-g))))
+
 (ert-deftest herdr-term-command-mode:sends-escape-to-the-pane ()
   "Escape reaches the program in the pane rather than leaving insert.
 evil spends it on `evil-normal-state', and evil-ghostel hands it over
@@ -1031,6 +1049,17 @@ that loses the rank contest takes the shell's line editing away."
   (herdr-term-with-evil-buffer 'insert
     (dolist (key herdr-term-evil-passthrough-keys)
       (should (eq (key-binding (kbd key)) #'ghostel--send-event)))))
+
+(ert-deftest herdr-term-command-mode:keeps-control-g-for-emacs ()
+  "Control-G quits Emacs even when evil insert state owns input."
+  (herdr-term-with-evil-buffer 'insert
+    (should (eq (key-binding (kbd "C-g")) #'keyboard-quit))))
+
+(ert-deftest herdr-term-command-mode:provides-control-g-prefix ()
+  "The prefixed binding sends control-G even in evil insert state."
+  (herdr-term-with-evil-buffer 'insert
+    (should (eq (key-binding (kbd "C-c C-g"))
+                #'herdr-term-send-control-g))))
 
 (ert-deftest herdr-term-command-mode:scrolls-the-pane-in-normal-state ()
   "Normal state motions move the pane's viewport, not point.
