@@ -1015,6 +1015,40 @@ prefix argument means here what it means to `herdr-panel-visit'."
   (mouse-set-point event)
   (herdr-panel-visit current-prefix-arg))
 
+(defun herdr-panel-read-rows (prompt rows-function empty)
+  "Read one of a panel's rows and return the pane it leads to.
+PROMPT is what the minibuffer asks.  ROWS-FUNCTION is called with the
+pane on screen and returns an alist of (LINE . PANE), the rows to
+offer.  EMPTY is the message for a session with none of them: that is
+an ordinary state herdr reports rather than a call that failed, so it
+is a `user-error' naming what is missing.
+
+The rows are made after the tree is made sure of, because every panel
+builds them by reading it.  See `herdr-panel-read-nodes', which is
+this plus the usual way of turning nodes into rows."
+  (herdr-panel-ensure-session)
+  (let ((rows (funcall rows-function (herdr-panel-current-pane))))
+    (unless rows
+      (user-error "%s" empty))
+    (herdr-panel-read-pane prompt rows)))
+
+(defun herdr-panel-read-nodes (prompt nodes-function entry empty)
+  "Read one of a panel's nodes and return the pane it stands for.
+NODES-FUNCTION is called with no arguments and returns the tree nodes
+to offer, each carrying a `pane_id'.  ENTRY is called with a node and
+the pane on screen and returns the row plist for it, which is the same
+call the panel makes when it draws that row: naming one in the
+minibuffer lands where pressing RET on it would.  PROMPT and EMPTY are
+as in `herdr-panel-read-rows'."
+  (herdr-panel-read-rows
+   prompt
+   (lambda (current)
+     (mapcar (lambda (node)
+               (cons (herdr-panel-entry-line (funcall entry node current))
+                     (gethash "pane_id" node)))
+             (funcall nodes-function)))
+   empty))
+
 (defun herdr-panel-access (invert)
   "Return how to open a terminal, INVERT swapping the usual answer.
 The usual answer is `herdr-panel-visit-access'.  Every way of reaching

@@ -403,16 +403,10 @@ With a prefix argument OTHER, open it the other way round from
   "Read a pane of the session with completion and return it.
 Rows run in the order herdr reports the panes, which keeps the panes
 of one workspace together."
-  (herdr-panel-ensure-session)
-  (let* ((current (herdr-panel-current-pane))
-         (rows (mapcar (lambda (pane)
-                         (cons (herdr-panel-entry-line
-                                (herdr-ui--pane-entry pane current))
-                               (gethash "pane_id" pane)))
-                       (herdr-session-panes))))
-    (unless rows
-      (user-error "Herdr reports no pane to visit"))
-    (herdr-panel-read-pane "Terminal: " rows)))
+  (herdr-panel-read-nodes "Terminal: "
+                          #'herdr-session-panes
+                          #'herdr-ui--pane-entry
+                          "Herdr reports no pane to visit"))
 
 (defun herdr-ui--pane-entry (pane current)
   "Return the row for PANE, emphasised against the CURRENT one.

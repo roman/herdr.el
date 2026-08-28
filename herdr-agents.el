@@ -150,18 +150,10 @@ prefix argument OTHER, open it the other way round from
 
 (defun herdr-agents--read ()
   "Read an agent with completion and return its pane."
-  (herdr-panel-ensure-session)
-  (let ((agents (herdr-agents--sorted))
-        (current (herdr-panel-current-pane)))
-    (unless agents
-      (user-error "Herdr has detected no agents"))
-    (herdr-panel-read-pane
-     "Agent: "
-     (mapcar (lambda (agent)
-               (cons (herdr-panel-entry-line
-                      (herdr-agents--entry agent current))
-                     (gethash "pane_id" agent)))
-             agents))))
+  (herdr-panel-read-nodes "Agent: "
+                          #'herdr-agents--sorted
+                          #'herdr-agents--entry
+                          "Herdr has detected no agents"))
 
 (defun herdr-agents-refresh ()
   "Redraw the agents panel from the session tree."

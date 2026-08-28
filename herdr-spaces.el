@@ -140,19 +140,22 @@ would."
   "Read a workspace with completion and return the pane to visit for it.
 A workspace herdr reports no pane in is left out, because there would
 be nothing to show for it."
-  (herdr-panel-ensure-session)
+  (herdr-panel-read-rows "Workspace: "
+                         #'herdr-spaces--rows
+                         "Herdr reports no workspace to visit"))
+
+(defun herdr-spaces--rows (pane)
+  "Return the rows to offer, PANE being the one on screen.
+A workspace of one pane is offered as itself.  One of several is
+offered as its pane rows and not as the heading above them, because
+that heading leads to one of those panes and would be a second name
+for a row already in the prompt."
   (let ((current (herdr-spaces--current-workspace))
-        (pane (herdr-panel-current-pane))
         (rows nil))
     (dolist (space (herdr-session-spaces))
       (dolist (workspace (plist-get space :workspaces))
         (let ((panes (herdr-spaces--workspace-panes workspace)))
           (if (cdr panes)
-              ;; The pane rows the panel draws beneath the workspace, so
-              ;; that naming one lands where walking to it would.  The
-              ;; heading above them is not offered: it leads to one of
-              ;; these panes, so it would be a second name for a row
-              ;; already in the prompt.
               (dolist (child panes)
                 (push (cons (herdr-panel-entry-line
                              (herdr-spaces--pane-entry child pane))
@@ -163,9 +166,7 @@ be nothing to show for it."
                            (herdr-spaces--entry workspace current))
                           only)
                     rows))))))
-    (unless rows
-      (user-error "Herdr reports no workspace to visit"))
-    (herdr-panel-read-pane "Workspace: " (nreverse rows))))
+    (nreverse rows)))
 
 (defun herdr-spaces-refresh ()
   "Redraw the spaces panel from the session tree."

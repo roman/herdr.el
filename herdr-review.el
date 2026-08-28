@@ -174,18 +174,10 @@ what starts one."
 
 (defun herdr-review--read ()
   "Read a review with completion and return the pane holding it."
-  (herdr-panel-ensure-session)
-  (let ((reviews (herdr-review-list))
-        (current (herdr-panel-current-pane)))
-    (unless reviews
-      (user-error "Nothing is waiting to be reviewed"))
-    (herdr-panel-read-pane
-     "Review: "
-     (mapcar (lambda (review)
-               (cons (herdr-panel-entry-line
-                      (herdr-review--entry review current))
-                     (gethash "pane_id" review)))
-             reviews))))
+  (herdr-panel-read-nodes "Review: "
+                          #'herdr-review-list
+                          #'herdr-review--entry
+                          "Nothing is waiting to be reviewed"))
 
 (defun herdr-review-refresh ()
   "Redraw the reviews panel from the session tree."
