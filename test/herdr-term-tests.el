@@ -831,6 +831,151 @@ line for point to reach."
     (should-error (herdr-term-scroll-up) :type 'user-error)
     (should (null herdr-term-test-sent))))
 
+;;; Splitting A Pane
+
+(defvar herdr-term-tests--asked nil
+  "Calls `herdr-api-request' was given, as (METHOD . PARAMS), in order.")
+
+(defmacro herdr-term-with-api (result &rest body)
+  "Evaluate BODY with `herdr-api-request' answering RESULT.
+RESULT is a JSON string, parsed the way the real call parses a reply.
+`herdr-term-tests--asked' is left holding what was asked, so a test can
+assert on the parameters as well as on what the command did with the
+answer."
+  (declare (indent 1) (debug t))
+  `(let ((herdr-term-tests--asked nil))
+     (cl-letf (((symbol-function 'herdr-api-request)
+                (lambda (method &optional params)
+                  (push (cons method params) herdr-term-tests--asked)
+                  (json-parse-string ,result))))
+       ,@body)))
+
+(defun herdr-term-tests--asked-for (method)
+  "Return the parameters `herdr-api-request' was given for METHOD.
+The calls are pushed as they happen, so the list runs newest first and
+is reversed here to answer with the first call for METHOD."
+  (cdr (assoc method (reverse herdr-term-tests--asked))))
+
+(ert-deftest herdr-term--split:names-the-pane-and-the-direction ()
+  "The split is asked for against the pane the buffer mirrors."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (herdr-term-with-api "{\"pane\":{\"pane_id\":\"w1:p2\"}}"
+      (cl-letf (((symbol-function 'herdr-term--open-beside) #'ignore))
+        (herdr-term--split "right")
+        (let ((params (herdr-term-tests--asked-for "pane.split")))
+          (should (equal (plist-get params :target_pane_id) "w1:p1"))
+          (should (equal (plist-get params :direction) "right")))))))
+
+(ert-deftest herdr-term--split:leaves-herdr-focused-where-it-was ()
+  "Focus is never asked for, because Emacs is itself in a herdr pane.
+Moving herdr's focus onto the new pane would send the keyboard there
+and take it away from this Emacs, so the split is made unfocused and
+Emacs shows it in a window instead."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (herdr-term-with-api "{\"pane\":{\"pane_id\":\"w1:p2\"}}"
+      (cl-letf (((symbol-function 'herdr-term--open-beside) #'ignore))
+        (herdr-term--split "down")
+        (should-not (plist-member (herdr-term-tests--asked-for "pane.split")
+                                  :focus))))))
+
+(ert-deftest herdr-term--split:reports-an-answer-it-cannot-use ()
+  "A reply naming no pane is ours to report, not the API's."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (herdr-term-with-api "{}"
+      (let ((error-data (should-error (herdr-term--split "right")
+                                      :type 'user-error)))
+        (should (string-match-p "named no pane" (cadr error-data)))))))
+
+(ert-deftest herdr-term--this-pane:refuses-outside-a-terminal ()
+  "A buffer mirroring nothing has no pane for a command to act on."
+  (with-temp-buffer
+    (should-error (herdr-term--this-pane) :type 'user-error)))
+
+(ert-deftest herdr-term--after:wraps-at-the-last ()
+  "Walking past the last pane of a tab returns to its first."
+  (should (equal (herdr-term--after "b" '("a" "b" "c")) "c"))
+  (should (equal (herdr-term--after "c" '("a" "b" "c")) "a")))
+
+(ert-deftest herdr-term-kill-pane:ends-the-pane-once-answered-for ()
+  "Saying yes closes the pane herdr owns, not merely the buffer."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (herdr-term-with-api "{\"type\":\"ok\"}"
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                ((symbol-function 'kill-buffer) #'ignore)
+                ;; Guarded, not merely unused: run interactively on a
+                ;; split frame this would otherwise take down the
+                ;; window the test was started from.
+                ((symbol-function 'delete-window)
+                 (lambda (&rest _) (error "No window may be deleted here"))))
+        (herdr-term-kill-pane)
+        (should (equal (herdr-term-tests--asked-for "pane.close")
+                       '(:pane_id "w1:p1")))))))
+
+(ert-deftest herdr-term-kill-pane:leaves-the-pane-alone-when-refused ()
+  "Saying no spends no call.
+The pane ends for every client of the session, so it is not something
+to end by mistake."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (herdr-term-with-api "{\"type\":\"ok\"}"
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil))
+                ((symbol-function 'kill-buffer) #'ignore)
+                ((symbol-function 'delete-window)
+                 (lambda (&rest _) (error "No window may be deleted here"))))
+        (should-error (herdr-term-kill-pane) :type 'user-error)
+        (should (null herdr-term-tests--asked))))))
+
+(ert-deftest herdr-term-kill-pane:spares-a-window-it-did-not-make ()
+  "Only a window split off another goes with the pane in it.
+A terminal opened by a panel sits in the main window of the layout,
+which holds whichever pane is being worked in.  Deleting that would
+take the layout apart on the way to closing one pane."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (herdr-term-with-api "{\"type\":\"ok\"}"
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                ((symbol-function 'kill-buffer) #'ignore)
+                ((symbol-function 'one-window-p) (lambda (&rest _) nil))
+                ((symbol-function 'delete-window)
+                 (lambda (&rest _)
+                   (error "A window nobody split was deleted"))))
+        ;; No `herdr-term-split' parameter: the selected window of a
+        ;; batch frame stands for the one a panel would have used.
+        (should-not (window-parameter (selected-window) 'herdr-term-split))
+        (herdr-term-kill-pane)))))
+
+(ert-deftest herdr-term--tab-panes:asks-herdr-rather-than-the-tree ()
+  "A pane split a keystroke ago is not in the session tree yet.
+Read from the tree, the walk would call the new pane the only one in
+its tab, which is the state the tree is a moment behind on."
+  (cl-letf (((symbol-function 'herdr-session-pane)
+             (lambda (&rest _) (error "The tree must not be read here")))
+            ((symbol-function 'herdr-api-request)
+             (lambda (&rest _)
+               (json-parse-string
+                "{\"panes\":[{\"pane_id\":\"w1:p1\",\"tab_id\":\"w1:t1\"},\
+{\"pane_id\":\"w1:p2\",\"tab_id\":\"w1:t1\"},\
+{\"pane_id\":\"w1:p3\",\"tab_id\":\"w1:t2\"}]}"))))
+    (should (equal (herdr-term--tab-panes "w1:p2") '("w1:p1" "w1:p2")))))
+
+(ert-deftest herdr-term--tab-panes:says-nothing-for-a-pane-herdr-lost ()
+  "A pane herdr no longer reports has no tab and so no siblings."
+  (cl-letf (((symbol-function 'herdr-api-request)
+             (lambda (&rest _) (json-parse-string "{\"panes\":[]}"))))
+    (should (null (herdr-term--tab-panes "w1:p1")))))
+
+(ert-deftest herdr-term-other-pane:refuses-when-the-tab-holds-one ()
+  "A tab of one pane has nowhere to move to, and says so."
+  (herdr-term-with-test-buffer
+    (setq herdr-term--pane "w1:p1")
+    (cl-letf (((symbol-function 'herdr-term--tab-panes)
+               (lambda (_pane) '("w1:p1"))))
+      (should-error (herdr-term-other-pane) :type 'user-error))))
+
 ;;; Panes
 
 (ert-deftest herdr-term--panes:pairs-ids-with-info ()
@@ -850,12 +995,12 @@ line for point to reach."
              (lambda (&rest _) (json-parse-string "{}"))))
     (should (null (herdr-term--panes)))))
 
-(ert-deftest herdr-term--read-pane:reports-an-empty-session ()
+(ert-deftest herdr-term-read-pane:reports-an-empty-session ()
   "No panes is an ordinary state herdr reports, not a failed call.
 It deserves a message saying what to do, not an API error."
   (cl-letf (((symbol-function 'herdr-api-request)
              (lambda (&rest _) (json-parse-string "{}"))))
-    (let ((error-data (should-error (herdr-term--read-pane "Pane: ")
+    (let ((error-data (should-error (herdr-term-read-pane "Pane: ")
                                     :type 'user-error)))
       (should-not (eq (car error-data) 'herdr-api-error))
       (should (string-match-p "No live herdr panes" (cadr error-data))))))

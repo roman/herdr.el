@@ -62,6 +62,13 @@
 ;; thing the JSON API does not carry.  Everything structural, such as
 ;; listing panes or creating a workspace, goes through `herdr-api'.
 
+;; Splitting a pane, ending one and walking between the panes of a tab are
+;; here, because each acts on the pane a terminal mirrors.  A split is
+;; made unfocused: this Emacs is itself a program in a herdr pane, so
+;; moving herdr's focus onto the new pane would send the keyboard there
+;; and take it away from Emacs.  The window opened beside the old one
+;; takes what is typed instead.  Tabs are `herdr-ui', which draws them.
+
 ;;; Code:
 
 (require 'ghostel)
@@ -194,6 +201,13 @@ which makes it the record of whether that connection ever synced.")
   "C-c C-k" #'herdr-term-close
   "C-c C-w" #'herdr-term-take-control
   "C-c C-e" #'herdr-term-scroll-to-bottom
+  ;; The digits are the shape of the split, as they are in the window
+  ;; commands every Emacs user already has: 2 divides the window across,
+  ;; 3 divides it down the middle.
+  "C-c C-2" #'herdr-term-split-down
+  "C-c C-3" #'herdr-term-split-right
+  "C-c C-o" #'herdr-term-other-pane
+  "C-c C-x" #'herdr-term-kill-pane
   "S-<prior>" #'herdr-term-scroll-page-up
   "S-<next>" #'herdr-term-scroll-page-down
   "<wheel-up>" #'herdr-term-scroll-up
@@ -258,7 +272,7 @@ keystrokes reach the pane; otherwise attach `observe', which is read
 only.  Re-opening a pane that is already streaming only displays its
 buffer, because re-initializing would tear down a working terminal."
   (interactive
-   (list (herdr-term--read-pane "Open pane: ") current-prefix-arg))
+   (list (herdr-term-read-pane "Open pane: ") current-prefix-arg))
   (ghostel--load-module t)
   (let* ((name (herdr-term--buffer-name pane))
          (existing (herdr-term--buffer pane)))
@@ -296,6 +310,148 @@ directory when the current buffer is remote."
     (unless pane
       (user-error "Herdr created no pane for %s" directory))
     (herdr-term-open pane t)))
+
+;;;###autoload
+(defun herdr-term-split-right ()
+  "Split this terminal's pane in herdr and open the new one beside it."
+  (interactive)
+  (herdr-term--split "right"))
+
+;;;###autoload
+(defun herdr-term-split-down ()
+  "Split this terminal's pane in herdr and open the new one below it."
+  (interactive)
+  (herdr-term--split "down"))
+
+(defun herdr-term--split (direction)
+  "Split the pane this buffer mirrors, to the DIRECTION of it.
+DIRECTION is \"right\" or \"down\", the two herdr splits on.  The new
+pane runs a shell in the directory the split pane is in, which is what
+herdr starts one in when the request names no other.
+
+herdr is not asked to focus the new pane.  This Emacs is itself a
+program in a herdr pane, so moving herdr's focus would send the
+keyboard to the new pane and take it away from Emacs.  The window
+opened here takes what is typed instead."
+  (let* ((pane (herdr-term--this-pane))
+         (result (herdr-api-request "pane.split"
+                                    (list :target_pane_id pane
+                                          :direction direction)))
+         (created (gethash "pane" result))
+         (new (and created (gethash "pane_id" created))))
+    ;; The call itself succeeded; herdr just answered with a shape this
+    ;; command cannot use, which is ours to report, not the API's.
+    (unless new
+      (user-error "Herdr split %s but named no pane" pane))
+    (herdr-term--open-beside new direction)))
+
+(defun herdr-term--open-beside (pane direction)
+  "Open PANE in a window split off this one, to the DIRECTION of it.
+The terminal is opened with control, because a pane split off the one
+being worked in is one to work in rather than one to watch.
+
+The window is marked as one this command made, which is what lets
+\\[herdr-term-kill-pane] take it down again without touching a window
+that was already there."
+  (let ((window (if (equal direction "right")
+                    (split-window-right)
+                  (split-window-below)))
+        (was (selected-window)))
+    (set-window-parameter window 'herdr-term-split t)
+    (let ((display-buffer-overriding-action
+           (list (lambda (buffer _alist)
+                   (set-window-buffer window buffer)
+                   window))))
+      (herdr-term-open pane t))
+    (select-window window)
+    ;; Both windows are new sizes, and the hook that notices a resize
+    ;; runs from redisplay, which a command rearranging windows does not
+    ;; always reach.  A terminal left unfitted draws into a fraction of
+    ;; the width it now has.
+    (herdr-term--note-resize was)
+    (herdr-term--note-resize window)))
+
+(defun herdr-term--this-pane ()
+  "Return the pane this buffer mirrors, or refuse when it mirrors none."
+  (or herdr-term--pane
+      (user-error "This buffer mirrors no herdr pane")))
+
+;;;###autoload
+(defun herdr-term-kill-pane ()
+  "End the herdr pane this buffer mirrors, then close the buffer.
+The pane ends for every client of the session and the program in it
+goes with it, which is what separates this from
+\\[herdr-term-close], where only this Emacs stops looking.  herdr
+closes a tab along with its last pane, and a workspace along with its
+last tab, so this can take more than the pane named."
+  (interactive)
+  (let ((pane (herdr-term--this-pane)))
+    (unless (y-or-n-p (format "End herdr pane %s? " pane))
+      (user-error "Pane %s left alone" pane))
+    (herdr-api-request "pane.close" (list :pane_id pane))
+    (let ((window (selected-window)))
+      (kill-buffer)
+      ;; Only a window this package split off another goes with the pane
+      ;; in it.  The main window of a herdr layout holds whichever pane
+      ;; is being worked in and was not opened for this one, so deleting
+      ;; it would take the layout apart.
+      (when (and (window-live-p window)
+                 (window-parameter window 'herdr-term-split)
+                 (not (one-window-p)))
+        (delete-window window)))))
+
+;;;###autoload
+(defun herdr-term-other-pane ()
+  "Show the next pane of this terminal's tab, wrapping at the last.
+Only panes of one tab are walked.  Another tab is reached by its own
+commands, and a pane elsewhere in the session by the panels."
+  (interactive)
+  (let* ((pane (herdr-term--this-pane))
+         (siblings (herdr-term--tab-panes pane)))
+    (unless (cdr siblings)
+      (user-error "Pane %s is the only one in its tab" pane))
+    (herdr-term--show-here (herdr-term--after pane siblings))))
+
+(defun herdr-term--show-here (pane)
+  "Open PANE with control in the window the current one is in.
+Walking to a sibling replaces what is being looked at rather than
+splitting the frame again, which is what `pop-to-buffer' would do
+inside a herdr layout."
+  (let* ((window (selected-window))
+         (display-buffer-overriding-action
+          (list (lambda (buffer _alist)
+                  (set-window-buffer window buffer)
+                  window))))
+    (herdr-term-open pane t))
+  ;; `herdr-term-open' shows a terminal that is already streaming as it
+  ;; stands, so control has to be asked for again here.  A sibling first
+  ;; opened from a panel observes, and would go on ignoring what is
+  ;; typed at it however often it was walked to.
+  (when-let* ((buffer (herdr-term--buffer pane))
+              ((not (buffer-local-value 'herdr-term--writable buffer))))
+    (with-current-buffer buffer
+      (herdr-term-take-control)))
+  (herdr-term--note-resize (selected-window)))
+
+(defun herdr-term--tab-panes (pane)
+  "Return the identifiers of every pane sharing PANE's tab, in order.
+Asked of herdr rather than read from the session tree.  The tree is
+refreshed from an event a moment after the change that raised it, so a
+split made here is not in it yet, and a walk that read it would report
+the pane just made as the only one in its tab."
+  (let ((panes (herdr-term--panes)))
+    (when-let* ((info (cdr (assoc pane panes)))
+                (tab (gethash "tab_id" info)))
+      (delq nil
+            (mapcar (lambda (entry)
+                      (and (equal (gethash "tab_id" (cdr entry)) tab)
+                           (car entry)))
+                    panes)))))
+
+(defun herdr-term--after (item items)
+  "Return what follows ITEM in ITEMS, or the first when it is last."
+  (let ((rest (cdr (member item items))))
+    (or (car rest) (car items))))
 
 (defun herdr-term-send-control-g ()
   "Send a literal control-G byte to the program in the pane."
@@ -1076,7 +1232,7 @@ INFO is the hash-table herdr reported for that pane."
     (seq-map (lambda (pane) (cons (gethash "pane_id" pane) pane))
              (or panes []))))
 
-(defun herdr-term--read-pane (prompt)
+(defun herdr-term-read-pane (prompt)
   "Read the identifier of a live herdr pane, prompting with PROMPT.
 Candidates are annotated with the pane's working directory, its
 detected agent and its workspace."
