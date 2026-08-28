@@ -287,6 +287,7 @@ in a column is the column's business and not the row's."
                                           current)
         :id (gethash "workspace_id" workspace)
         :label (herdr-spaces--name workspace)
+        :aside (herdr-spaces--pane-name workspace)
         :detail (herdr-spaces--detail workspace)))
 
 (defun herdr-spaces--name (workspace)
@@ -316,6 +317,19 @@ them is, because that is the one taking what is typed."
                           (herdr-panel-pane-writable-p
                            (gethash "pane_id" pane)))
                         panes)))))
+
+(defun herdr-spaces--pane-name (workspace)
+  "Return the pane WORKSPACE leads to, in parentheses, or nil.
+A herdr command names a pane and never a label, so the row carries the
+identifier for a reader to copy into one.  `herdr-spaces-visit' opens
+this same pane, which keeps the row and RET on it pointing at one
+terminal.
+
+A workspace of several windows may run what the reader wants in
+another one of them.  The row says how many windows it holds, and the
+Agents panel names the pane of each agent it found."
+  (when-let* ((pane (herdr-spaces--pane workspace)))
+    (format "(%s)" pane)))
 
 (defun herdr-spaces--detail (workspace)
   "Return the lines that follow WORKSPACE's name.

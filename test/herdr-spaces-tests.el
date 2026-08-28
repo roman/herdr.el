@@ -245,13 +245,35 @@ nobody opened in this Emacs is not in it."
              (entry (herdr-spaces--entry workspace nil))
              (line (herdr-panel-entry-line entry))
              (columns (herdr-panel--completion-columns line)))
-        (should (null (plist-get entry :aside)))
         (should (equal (herdr-spaces-tests--plain
                         (plist-get entry :detail))
                        '("/tmp/project" "")))
         (should (equal (herdr-spaces-tests--plain columns)
-                       '("●" "project" "" ""
+                       '("●" "project" "(w1:p1)" ""
                          "/tmp/project" "")))))))
+
+;;; Naming The Pane To Address
+
+(ert-deftest herdr-spaces--entry:names-the-pane-to-address ()
+  "A workspace row carries the pane it leads to.
+A herdr command names that pane, so a reader looking at two checkouts
+of one repository can copy the identifier off the row rather than
+search the session for it."
+  (herdr-spaces-with-snapshot (herdr-spaces-tests--snapshot)
+    (let ((entry (herdr-spaces--entry (car (herdr-session-workspaces))
+                                      nil)))
+      (should (equal (substring-no-properties (plist-get entry :aside))
+                     "(w1:p1)")))))
+
+(ert-deftest herdr-spaces--entry:omits-the-pane-when-there-is-none ()
+  "A workspace herdr reports no pane in has no identifier to offer."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "herdr" "idle"))
+            :panes (vector))
+    (should (null (plist-get (herdr-spaces--entry
+                              (herdr-session-workspace "w1") nil)
+                             :aside)))))
 
 ;;; _
 (provide 'herdr-spaces-tests)
