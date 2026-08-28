@@ -40,12 +40,21 @@
 ;; to show one row of labels, and Emacs already puts tabs on the tab line,
 ;; which is where a reader looks for them.
 
+;; The commands that make, close, rename and walk those tabs are here too,
+;; because each of them means the tab of the pane a terminal mirrors and
+;; the tab line is what shows the result.  None asks herdr to focus what
+;; it made.  This Emacs is a program in a herdr pane, so herdr's focus
+;; decides where the keyboard goes, and a command that moved it would take
+;; the keyboard out of Emacs.  Splitting a pane lives in `herdr-term',
+;; which owns the terminal a split comes off.
+
 ;;; Code:
 
 (require 'seq)
 (require 'tab-line)
 
 (require 'herdr-agents)
+(require 'herdr-api)
 (require 'herdr-panel)
 (require 'herdr-session)
 (require 'herdr-spaces)
@@ -65,7 +74,14 @@
 
 (with-eval-after-load 'herdr-term
   (keymap-set herdr-term-command-mode-map "C-c C-b"
-              #'herdr-ui-toggle-panels))
+              #'herdr-ui-toggle-panels)
+  ;; The tab commands answer in a terminal and nowhere else: the tab one
+  ;; of them means is the tab of the pane that terminal mirrors.
+  (keymap-set herdr-term-command-mode-map "C-c C-t" #'herdr-ui-tab-new)
+  (keymap-set herdr-term-command-mode-map "C-c C-n" #'herdr-ui-tab-next)
+  (keymap-set herdr-term-command-mode-map "C-c C-p" #'herdr-ui-tab-previous)
+  (keymap-set herdr-term-command-mode-map "C-c C-r" #'herdr-ui-tab-rename)
+  (keymap-set herdr-term-command-mode-map "C-c C-d" #'herdr-ui-tab-close))
 
 ;;; Options
 
@@ -262,14 +278,6 @@ HEIGHT is its share of the frame."
               (and (gethash "focused" pane) (gethash "pane_id" pane)))
             (herdr-session-panes)))
 
-(defun herdr-ui--read-pane ()
-  "Read a pane of the session with completion."
-  (let ((panes (mapcar (lambda (pane) (gethash "pane_id" pane))
-                       (herdr-session-panes))))
-    (unless panes
-      (user-error "Herdr reports no panes"))
-    (completing-read "Pane: " panes nil t)))
-
 ;;;###autoload
 (defun herdr-ui-quit ()
   "Take the herdr panels off the frame and stop tracking the session.
@@ -347,10 +355,102 @@ clicking one shows a terminal for it."
 (defun herdr-ui-visit-tab (tab-id)
   "Show a terminal for the first pane of TAB-ID."
   (interactive (list (herdr-ui--read-tab)))
-  (let ((pane (car (herdr-session-panes tab-id))))
+  (let ((pane (herdr-ui--tab-pane tab-id)))
     (unless pane
       (user-error "Tab %s has no pane" tab-id))
-    (herdr-panel-open-pane (gethash "pane_id" pane))))
+    (herdr-panel-open-pane pane)))
+
+(defun herdr-ui--tab-pane (tab)
+  "Return the first pane of TAB, or nil.
+The session tree answers when it has TAB, and herdr itself when it does
+not, for the reason `herdr-ui--pane-node' gives.  Stepping onto a tab
+made a keystroke ago reaches this before any event has refreshed the
+tree, and reading the tree alone refused to open the tab it had just
+been asked for."
+  (or (gethash "pane_id" (or (car (herdr-session-panes tab))
+                             (make-hash-table :size 1)))
+      (car (herdr-ui--panes tab))))
+
+(defun herdr-ui--panes (tab)
+  "Return the identifiers of TAB's panes, as herdr reports them now."
+  (let ((panes (gethash "panes" (herdr-api-request "pane.list"))))
+    (delq nil
+          (mapcar (lambda (pane)
+                    (and (equal (gethash "tab_id" pane) tab)
+                         (gethash "pane_id" pane)))
+                  (or panes [])))))
+
+;;; Reaching Any Terminal Of The Session
+
+;; One prompt over every pane, which no single panel can offer: a Spaces
+;; row leads to the pane of its workspace's active tab, and an Agents row
+;; exists only where herdr recognised something running.  A shell split
+;; off another pane is in neither.
+
+;; The row is built here rather than in either panel because it takes from
+;; both — the workspace and its checkout from Spaces, the agent's glyph
+;; from Agents — and this file is where they already meet.
+
+;;;###autoload
+(defun herdr-ui-visit-pane (pane &optional other)
+  "Show the terminal for PANE, read over every pane of the session.
+With a prefix argument OTHER, open it the other way round from
+`herdr-panel-visit-access', as the panels' own visit commands do."
+  (interactive (list (herdr-ui--read-pane) current-prefix-arg))
+  (herdr-panel-open-pane pane (herdr-panel-access other)))
+
+(defun herdr-ui--read-pane ()
+  "Read a pane of the session with completion and return it.
+Rows run in the order herdr reports the panes, which keeps the panes
+of one workspace together."
+  (herdr-panel-ensure-session)
+  (let* ((current (herdr-panel-current-pane))
+         (rows (mapcar (lambda (pane)
+                         (cons (herdr-panel-entry-line
+                                (herdr-ui--pane-entry pane current))
+                               (gethash "pane_id" pane)))
+                       (herdr-session-panes))))
+    (unless rows
+      (user-error "Herdr reports no pane to visit"))
+    (herdr-panel-read-pane "Terminal: " rows)))
+
+(defun herdr-ui--pane-entry (pane current)
+  "Return the row for PANE, emphasised against the CURRENT one.
+The status mark opens the row, then the workspace and the pane's own
+identifier, then the agent as its glyph alone.  The glyph carries the
+kind on its own, so spelling the name beside it would say one thing
+twice in a row that has to stay readable at a glance."
+  (list :status (herdr-session-status pane)
+        :emphasis (herdr-panel-emphasis (gethash "pane_id" pane) current)
+        :id (gethash "pane_id" pane)
+        :label (herdr-ui--pane-label pane)
+        :aside (herdr-agents-glyph pane)
+        :detail (herdr-ui--pane-detail pane)))
+
+(defun herdr-ui--pane-label (pane)
+  "Return the workspace PANE belongs to, with PANE's own name beside it.
+The workspace says which checkout, and the identifier tells two panes
+of it apart.  A workspace herdr no longer reports leaves the
+identifier standing alone, which still names the pane."
+  (let* ((workspace (herdr-session-workspace (gethash "workspace_id" pane)))
+         (label (and workspace (gethash "label" workspace)))
+         (id (gethash "pane_id" pane)))
+    (if label (format "%s (%s)" label id) id)))
+
+(defun herdr-ui--pane-detail (pane)
+  "Return the line that follows PANE's name: where the terminal sits.
+The branch and the working tree are left to the Spaces panel.  They
+are the same for every pane of one checkout, so in a list of terminals
+they repeat down the column without telling any two of them apart.
+The face is what sorts this into the prompt's location column."
+  (let* ((directory (gethash "cwd" pane))
+         (parts (delq nil (list (and directory
+                                     (herdr-panel-text
+                                      (abbreviate-file-name directory)
+                                      'herdr-panel-path))
+                                (herdr-panel-tab-name pane)))))
+    (and parts (list (string-join parts " ")))))
+
 
 (defun herdr-ui--read-tab ()
   "Read a tab of the session with completion."
@@ -359,6 +459,139 @@ clicking one shows a terminal for it."
     (unless tabs
       (user-error "Herdr reports no tabs"))
     (completing-read "Tab: " tabs nil t)))
+
+;;; Tabs Of The Terminal's Workspace
+
+;; The tab line draws these, and every command here is reached from a
+;; terminal buffer, because the tab a command means is the tab of the
+;; pane that buffer mirrors.  None of them asks herdr to focus what it
+;; made.  This Emacs is a program in a herdr pane, so herdr's focus is
+;; what decides where the keyboard goes, and a command that moved it
+;; would take the keyboard out of Emacs.  Emacs shows the new tab in a
+;; window of its own instead.
+
+(defun herdr-ui--this-pane ()
+  "Return the pane this buffer mirrors, or refuse when it mirrors none.
+Read through `herdr-panel--buffer-pane', which answers nil rather than
+signalling in an Emacs where the terminal was never loaded."
+  (or (herdr-panel--buffer-pane (current-buffer))
+      (user-error "This buffer mirrors no herdr pane")))
+
+(defun herdr-ui--pane-node (pane)
+  "Return what herdr knows about PANE, or nil.
+The session tree answers when it has PANE, and herdr itself when it
+does not.  The tree is refreshed from an event a moment after the
+change that raised it, so a pane made a keystroke ago is not in it yet,
+and a command that read the tree alone would refuse to act on the very
+pane it was just given."
+  (or (herdr-session-pane pane)
+      (gethash "pane" (herdr-api-request "pane.get" (list :pane_id pane)))))
+
+(defun herdr-ui--this-node ()
+  "Return what herdr knows about the pane this buffer mirrors.
+One lookup answers for both the tab and the workspace, so a command
+wanting each of them spends one call and not two."
+  (let ((pane (herdr-ui--this-pane)))
+    (or (herdr-ui--pane-node pane)
+        (user-error "Herdr reports nothing for pane %s" pane))))
+
+(defun herdr-ui--this-tab ()
+  "Return the tab holding the pane this buffer mirrors."
+  (gethash "tab_id" (herdr-ui--this-node)))
+
+(defun herdr-ui--this-workspace ()
+  "Return the workspace holding the pane this buffer mirrors."
+  (gethash "workspace_id" (herdr-ui--this-node)))
+
+;;;###autoload
+(defun herdr-ui-tab-new (&optional label)
+  "Create a tab in this terminal's workspace and show its pane.
+With a prefix argument, LABEL names the tab; otherwise herdr numbers
+it.  The new pane runs a shell in the workspace's own directory."
+  (interactive (list (when current-prefix-arg
+                       (read-string "New tab label: "))))
+  (let* ((result (herdr-api-request
+                  "tab.create"
+                  (append (list :workspace_id (herdr-ui--this-workspace))
+                          (when label (list :label label)))))
+         (root (gethash "root_pane" result))
+         (pane (and root (gethash "pane_id" root))))
+    ;; The call itself succeeded; herdr just answered with a shape this
+    ;; command cannot use, which is ours to report, not the API's.
+    (unless pane
+      (user-error "Herdr created a tab but named no pane in it"))
+    (herdr-panel-open-pane pane 'control)))
+
+;;;###autoload
+(defun herdr-ui-tab-close ()
+  "Close this terminal's tab in herdr, and every pane in it.
+The tab goes for every client of the session, and herdr closes a
+workspace along with its last tab."
+  (interactive)
+  (let ((tab (herdr-ui--this-tab)))
+    (unless (y-or-n-p (format "Close herdr tab %s and its panes? " tab))
+      (user-error "Tab %s left alone" tab))
+    ;; The panes are read before the tab goes, because afterwards herdr
+    ;; reports none for it and there would be no way left to say which
+    ;; buffers mirrored it.
+    (let ((panes (herdr-ui--panes tab)))
+      (herdr-api-request "tab.close" (list :tab_id tab))
+      ;; A stream whose pane has gone takes its buffer down on its own,
+      ;; under `herdr-term-pane-gone-action'.  Doing it here as well is
+      ;; what makes the buffers go with the tab rather than a moment
+      ;; later, which is how \\[herdr-term-kill-pane] behaves too.
+      (dolist (buffer (buffer-list))
+        ;; A local binding, not merely a value: `buffer-local-value'
+        ;; answers with the global one for a buffer that has none, so a
+        ;; test or a stray `setq' that left it non-nil would otherwise
+        ;; match every buffer in the session.
+        (when (and (local-variable-p 'herdr-term--pane buffer)
+                   (member (herdr-panel--buffer-pane buffer) panes))
+          (kill-buffer buffer))))))
+
+;;;###autoload
+(defun herdr-ui-tab-rename (label)
+  "Rename this terminal's tab to LABEL.
+The name replaces the number on the tab line, here and in herdr's own
+window."
+  (interactive (list (read-string "Rename tab to: ")))
+  (herdr-api-request "tab.rename"
+                     (list :tab_id (herdr-ui--this-tab) :label label)))
+
+;;;###autoload
+(defun herdr-ui-tab-next ()
+  "Show the next tab of this terminal's workspace, wrapping at the last."
+  (interactive)
+  (herdr-ui--step-tab #'identity))
+
+;;;###autoload
+(defun herdr-ui-tab-previous ()
+  "Show the previous tab of this terminal's workspace, wrapping at the first."
+  (interactive)
+  (herdr-ui--step-tab #'reverse))
+
+(defun herdr-ui--step-tab (order)
+  "Show the tab beside this one, ORDER choosing the direction.
+ORDER is `identity' to move forward and `reverse' to move back, so one
+walk serves both directions."
+  (let* ((node (herdr-ui--this-node))
+         (tab (gethash "tab_id" node))
+         (tabs (funcall order
+                        (herdr-ui--tabs (gethash "workspace_id" node)))))
+    (unless (cdr tabs)
+      (user-error "Herdr reports no tab beside %s" tab))
+    (herdr-ui-visit-tab (or (cadr (member tab tabs)) (car tabs)))))
+
+(defun herdr-ui--tabs (workspace)
+  "Return the identifiers of WORKSPACE's tabs, in the order herdr has them.
+Asked of herdr rather than read from the session tree, for the reason
+`herdr-ui--pane-node' gives: a tab made a keystroke ago is not in the
+tree yet, and a walk that read it would step straight past the tab it
+was just asked to make."
+  (let ((tabs (gethash "tabs" (herdr-api-request
+                               "tab.list"
+                               (list :workspace_id workspace)))))
+    (mapcar (lambda (node) (gethash "tab_id" node)) (or tabs []))))
 
 ;;;###autoload
 (define-minor-mode herdr-ui-tab-line-mode

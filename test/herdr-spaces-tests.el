@@ -160,7 +160,7 @@ behind a heading that looked quiet."
         (herdr-panel--pulse-begin "w2")
         (with-temp-buffer
           (magit-insert-section (herdr-spaces-tests-root)
-            (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+            (herdr-spaces--insert (car (herdr-session-spaces)) nil nil))
           (should (memq 'herdr-panel-attention-blocked
                         (herdr-spaces-tests--fill-at "repo-a")))
           (should (memq 'herdr-panel-attention-blocked
@@ -184,7 +184,7 @@ behind a heading that looked quiet."
         (herdr-panel--pulse-begin "repo-a")
         (with-temp-buffer
           (magit-insert-section (herdr-spaces-tests-root)
-            (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+            (herdr-spaces--insert (car (herdr-session-spaces)) nil nil))
           (should-not (memq 'herdr-panel-attention-blocked
                             (herdr-spaces-tests--fill-at "repo-a"))))))))
 
@@ -206,7 +206,7 @@ nobody opened in this Emacs is not in it."
       (herdr-panel--pulse-begin "w2")
       (with-temp-buffer
         (magit-insert-section (herdr-spaces-tests-root)
-          (herdr-spaces--insert (car (herdr-session-spaces)) nil))
+          (herdr-spaces--insert (car (herdr-session-spaces)) nil nil))
         (should-not (memq 'herdr-panel-attention-blocked
                           (herdr-spaces-tests--fill-at "repo-a")))
         (should-not (memq 'herdr-panel-attention-blocked
@@ -251,6 +251,105 @@ nobody opened in this Emacs is not in it."
         (should (equal (herdr-spaces-tests--plain columns)
                        '("●" "project" "(w1:p1)" ""
                          "/tmp/project" "")))))))
+
+;;; A Row For Each Pane Of A Workspace
+
+(defun herdr-spaces-tests--split (workspace &rest panes)
+  "Return a snapshot of WORKSPACE holding PANES, given as identifiers."
+  (list :workspaces
+        (vector (herdr-session-test-workspace workspace "project" "idle"))
+        :panes
+        (vconcat (mapcar (lambda (id)
+                           (herdr-spaces-tests--pane id workspace))
+                         panes))))
+
+(ert-deftest herdr-spaces--read:offers-every-pane-of-a-workspace ()
+  "A split pane is reachable by name.
+Only the active tab's pane used to be offered, so a shell split off
+another one could be reached from no panel at all."
+  (herdr-spaces-with-snapshot (herdr-spaces-tests--split "w1" "w1:p1" "w1:p2")
+    (herdr-panel-tests-offline
+      (herdr-panel-tests-choosing 1
+        (should (equal (herdr-spaces--read) "w1:p2"))
+        (should (eql (length herdr-panel-tests--offered) 2))))))
+
+(ert-deftest herdr-spaces--read:offers-a-workspace-of-one-pane-as-itself ()
+  "One pane is the workspace, and is offered under the workspace's name.
+A row repeating it would double every line of a column that is mostly
+workspaces of one."
+  (herdr-spaces-with-snapshot (herdr-spaces-tests--split "w1" "w1:p1")
+    (herdr-panel-tests-offline
+      (herdr-panel-tests-choosing 0
+        (should (equal (herdr-spaces--read) "w1:p1"))
+        (should (eql (length herdr-panel-tests--offered) 1))
+        (should (string-match-p "project" (car herdr-panel-tests--offered)))))))
+
+(ert-deftest herdr-spaces--insert-workspace:draws-a-row-for-each-pane ()
+  "A workspace of several panes carries a row for each of them."
+  (herdr-spaces-with-snapshot (herdr-spaces-tests--split "w1" "w1:p1" "w1:p2")
+    (with-temp-buffer
+      (magit-insert-section (herdr-spaces-tests-root)
+        (herdr-spaces--insert (car (herdr-session-spaces)) nil nil))
+      (let ((drawn (buffer-substring-no-properties (point-min) (point-max))))
+        (should (string-match-p "(w1:p1)" drawn))
+        (should (string-match-p "(w1:p2)" drawn))))))
+
+(ert-deftest herdr-spaces--entry:stops-claiming-one-activity-for-several ()
+  "A workspace of several panes carries no activity of its own.
+Each pane is in its own state, so one mark for the workspace would
+name a single pane's state and read as though it were the whole
+workspace's.  It carries `several' in its place, which is a mark of
+its own rather than one borrowed from a pane running nothing: a reader
+has to be able to tell the row that stands for the group from the rows
+it stands for."
+  (let ((herdr-spaces-git nil))
+    (herdr-session-with-snapshot (herdr-spaces-tests--snapshot)
+      (let ((workspace (car (herdr-session-workspaces))))
+        (should (equal (plist-get (herdr-spaces--entry workspace nil) :status)
+                       "working"))
+        (should (equal (plist-get (herdr-spaces--entry workspace nil t)
+                                  :status)
+                       "several"))))))
+
+(ert-deftest herdr-panel-status-symbol:gives-several-a-mark-of-its-own ()
+  "A row standing for a group is not drawn as a pane running nothing.
+Both are quiet, and a configuration that gives each status its own
+mark needs somewhere to say which is which."
+  (let ((herdr-panel-status-symbols
+         '(("unknown" . "T") ("several" . "C"))))
+    (should (equal (herdr-panel-status-symbol "several") "C"))
+    (should (equal (herdr-panel-status-symbol "unknown") "T"))))
+
+(ert-deftest herdr-spaces--entry:drops-the-pane-when-rows-carry-it ()
+  "The workspace row stops naming a pane once the rows beneath do.
+Kept, it would name the active tab's pane twice in the same column."
+  (let ((herdr-spaces-git nil))
+    (herdr-session-with-snapshot (herdr-spaces-tests--snapshot)
+      (let ((workspace (car (herdr-session-workspaces))))
+        (should (plist-get (herdr-spaces--entry workspace nil) :aside))
+        (should-not (plist-get (herdr-spaces--entry workspace nil t)
+                               :aside))))))
+
+(ert-deftest herdr-spaces--pane-label:names-the-agent-it-found ()
+  "A pane is told from its siblings by what herdr knows of it."
+  (let ((agent (make-hash-table :test #'equal))
+        (titled (make-hash-table :test #'equal))
+        (bare (make-hash-table :test #'equal)))
+    (puthash "agent" "codex" agent)
+    (puthash "terminal_title_stripped" "make test" titled)
+    (should (equal (herdr-spaces--pane-label agent) "codex"))
+    (should (equal (herdr-spaces--pane-label titled) "make test"))
+    (should (equal (herdr-spaces--pane-label bare) "shell"))))
+
+(ert-deftest herdr-spaces--pane-at-point:answers-with-the-pane-row ()
+  "A pane row leads to its own pane, not to its workspace's."
+  (with-temp-buffer
+    (magit-insert-section (herdr-spaces-tests-root)
+      (magit-insert-section (herdr-pane "w1:p2")
+        (insert "a pane row\n")))
+    (goto-char (point-max))
+    (forward-line -1)
+    (should (equal (herdr-spaces--pane-at-point) "w1:p2"))))
 
 ;;; Naming The Pane To Address
 

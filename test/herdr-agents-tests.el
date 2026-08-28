@@ -156,31 +156,48 @@ exists to raise."
 
 ;;; Titles
 
-(ert-deftest herdr-agents--detail:shows-an-agent-title ()
-  "The task title distinguishes agents sharing one workspace."
-  (herdr-session-with-snapshot
-      (list :workspaces
-            (vector (list :workspace_id "w1" :label "project"))
-            :agents
-            (vector (list :pane_id "w1:p1" :workspace_id "w1"
-                          :agent "claude" :agent_status "working"
-                          :terminal_title_stripped "fix agent rows")))
-    (should (equal (herdr-agents--detail
-                    (car (herdr-session-agents)))
-                   "fix agent rows"))))
+(ert-deftest herdr-agents--name:names-what-the-agent-is-working-on ()
+  "The task title distinguishes agents sharing one workspace.
+It leads the row because it is the field that changes: the workspace
+they sit in is the same for both and says nothing."
+  (let ((herdr-agents-icons '(("claude" . "◆"))))
+    (herdr-session-with-snapshot
+        (list :workspaces
+              (vector (list :workspace_id "w1" :label "project"))
+              :agents
+              (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                            :agent "claude" :agent_status "working"
+                            :terminal_title_stripped "fix agent rows")))
+      (should (equal (substring-no-properties
+                      (herdr-agents--name (car (herdr-session-agents))))
+                     "◆ fix agent rows")))))
 
-(ert-deftest herdr-agents--detail:omits-the-workspace-name ()
-  "A project-only terminal title is not repeated on a second line."
+(ert-deftest herdr-agents--name:falls-back-to-the-workspace ()
+  "An agent herdr reports no title for still has to name itself."
+  (let ((herdr-agents-icons nil))
+    (herdr-session-with-snapshot
+        (list :workspaces
+              (vector (list :workspace_id "w1" :label "project"))
+              :agents
+              (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                            :agent_status "working")))
+      (let ((herdr-session-codex-index-file nil))
+        (should (equal (substring-no-properties
+                        (herdr-agents--name (car (herdr-session-agents))))
+                       "project"))))))
+
+(ert-deftest herdr-agents--entry:takes-one-line ()
+  "The row carries nothing under its name."
   (herdr-session-with-snapshot
       (list :workspaces
             (vector (list :workspace_id "w1" :label "project"))
             :agents
             (vector (list :pane_id "w1:p1" :workspace_id "w1"
                           :agent "codex" :agent_status "working"
-                          :terminal_title_stripped "project")))
-    (let ((herdr-session-codex-index-file nil))
-      (should (null (herdr-agents--detail
-                     (car (herdr-session-agents))))))))
+                          :terminal_title_stripped "fix agent rows")))
+    (let ((entry (herdr-agents--entry (car (herdr-session-agents)) nil)))
+      (should-not (plist-get entry :detail))
+      (should-not (plist-get entry :aside)))))
 
 ;;; _
 (provide 'herdr-agents-tests)

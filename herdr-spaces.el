@@ -142,14 +142,27 @@ A workspace herdr reports no pane in is left out, because there would
 be nothing to show for it."
   (herdr-panel-ensure-session)
   (let ((current (herdr-spaces--current-workspace))
+        (pane (herdr-panel-current-pane))
         (rows nil))
     (dolist (space (herdr-session-spaces))
       (dolist (workspace (plist-get space :workspaces))
-        (when-let* ((pane (herdr-spaces--pane workspace)))
-          (push (cons (herdr-panel-entry-line
-                       (herdr-spaces--entry workspace current))
-                      pane)
-                rows))))
+        (let ((panes (herdr-spaces--workspace-panes workspace)))
+          (if (cdr panes)
+              ;; The pane rows the panel draws beneath the workspace, so
+              ;; that naming one lands where walking to it would.  The
+              ;; heading above them is not offered: it leads to one of
+              ;; these panes, so it would be a second name for a row
+              ;; already in the prompt.
+              (dolist (child panes)
+                (push (cons (herdr-panel-entry-line
+                             (herdr-spaces--pane-entry child pane))
+                            (gethash "pane_id" child))
+                      rows))
+            (when-let* ((only (herdr-spaces--pane workspace)))
+              (push (cons (herdr-panel-entry-line
+                           (herdr-spaces--entry workspace current))
+                          only)
+                    rows))))))
     (unless rows
       (user-error "Herdr reports no workspace to visit"))
     (herdr-panel-read-pane "Workspace: " (nreverse rows))))
@@ -162,12 +175,13 @@ be nothing to show for it."
       (magit-insert-section (herdr-spaces-root)
         (herdr-panel-insert-title "Spaces")
         (let ((spaces (herdr-session-spaces))
-              (current (herdr-spaces--current-workspace)))
+              (current (herdr-spaces--current-workspace))
+              (pane (herdr-panel-current-pane)))
           (if spaces
               (herdr-panel-insert-items
                spaces
                (lambda (space)
-                 (herdr-spaces--insert space current)))
+                 (herdr-spaces--insert space current pane)))
             (insert (propertize "  no spaces\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))
@@ -244,8 +258,9 @@ large repository and is rarely what the count is wanted for."
               (pane (herdr-session-pane pane-id)))
     (gethash "workspace_id" pane)))
 
-(defun herdr-spaces--insert (space current)
+(defun herdr-spaces--insert (space current pane)
   "Insert SPACE, marking the workspace CURRENT wherever it appears.
+PANE is the pane on screen, which marks a pane row the same way.
 A space of one workspace is drawn as that workspace: giving it a group
 to expand would put every ungrouped checkout behind a heading that
 holds a single child.
@@ -268,27 +283,83 @@ all there is left to say that something inside is waiting."
                    :id (plist-get space :key)
                    :emphasis (herdr-spaces--space-emphasis space current))))
           (dolist (workspace workspaces)
-            (herdr-spaces--insert-workspace workspace current "   ")))
-      (herdr-spaces--insert-workspace (car workspaces) current " "))))
+            (herdr-spaces--insert-workspace workspace current pane "   ")))
+      (herdr-spaces--insert-workspace (car workspaces) current pane " "))))
 
-(defun herdr-spaces--insert-workspace (workspace current indent)
+(defun herdr-spaces--insert-workspace (workspace current pane indent)
   "Insert WORKSPACE, emphasised against CURRENT and preceded by INDENT.
-INDENT is wider for a workspace drawn inside a space of several.  It
-is added here rather than carried in the row, because where a row sits
-in a column is the column's business and not the row's."
-  (magit-insert-section (herdr-workspace (gethash "workspace_id" workspace))
-    (herdr-panel-insert-entry
-     (append (list :indent indent) (herdr-spaces--entry workspace current)))))
+PANE is the pane on screen, for the rows drawn beneath a workspace of
+several panes.  INDENT is wider for a workspace drawn inside a
+space of several.  It is added here rather than carried in the row,
+because where a row sits in a column is the column's business and not
+the row's."
+  (let ((panes (herdr-spaces--workspace-panes workspace)))
+    (magit-insert-section (herdr-workspace (gethash "workspace_id" workspace))
+      (herdr-panel-insert-entry
+       (append (list :indent indent)
+               (herdr-spaces--entry workspace current (cdr panes))))
+      ;; Only where there are several.  One pane is the workspace, and a
+      ;; row repeating it under its own name would double every line of
+      ;; a column that is mostly workspaces of one.
+      (when (cdr panes)
+        (dolist (child panes)
+          (herdr-spaces--insert-pane child pane (concat indent "  ")))))))
 
-(defun herdr-spaces--entry (workspace current)
-  "Return the row for WORKSPACE, emphasised against the CURRENT one."
-  (list :status (herdr-session-status workspace)
+(defun herdr-spaces--entry (workspace current &optional pane-rows)
+  "Return the row for WORKSPACE, emphasised against the CURRENT one.
+PANE-ROWS says the panel is drawing a row for each pane underneath.
+That takes two things off this row.  The identifier goes because those
+rows carry one each, and naming the active tab's pane here as well
+would say it twice.  The activity goes because the panes of one
+workspace are each in their own state, and a single mark standing for
+all of them would name one pane's state and look like the workspace's.
+What is left in its place is the mark a pane running nothing carries,
+so the column keeps one bullet to a row and the row still lines up
+with the rest."
+  (list :status (if pane-rows "several" (herdr-session-status workspace))
         :emphasis (herdr-spaces--emphasis (gethash "workspace_id" workspace)
                                           current)
         :id (gethash "workspace_id" workspace)
         :label (herdr-spaces--name workspace)
-        :aside (herdr-spaces--pane-name workspace)
+        :aside (unless pane-rows (herdr-spaces--pane-name workspace))
         :detail (herdr-spaces--detail workspace)))
+
+(defun herdr-spaces--insert-pane (pane current indent)
+  "Insert the row for PANE, emphasised against CURRENT, behind INDENT."
+  (magit-insert-section (herdr-pane (gethash "pane_id" pane))
+    (herdr-panel-insert-entry
+     (append (list :indent indent) (herdr-spaces--pane-entry pane current)))))
+
+(defun herdr-spaces--pane-entry (pane current)
+  "Return the row for PANE, emphasised against the CURRENT pane."
+  (list :status (herdr-session-status pane)
+        :emphasis (herdr-panel-emphasis (gethash "pane_id" pane) current)
+        :id (gethash "pane_id" pane)
+        :label (herdr-spaces--pane-label pane)
+        :aside (format "(%s)" (gethash "pane_id" pane))
+        :detail (herdr-panel-tab-name pane)))
+
+(defun herdr-spaces--workspace-panes (workspace)
+  "Return every pane of WORKSPACE, in the order herdr reports them.
+Every tab's panes and not only the active tab's: a reader looking for a
+terminal wants the ones that exist, and which tab herdr last focused is
+not something they chose."
+  (let ((id (gethash "workspace_id" workspace)))
+    (seq-filter (lambda (pane)
+                  (equal (gethash "workspace_id" pane) id))
+                (herdr-session-panes))))
+
+(defun herdr-spaces--pane-label (pane)
+  "Return the name to show for PANE.
+The agent herdr detected in it, or the title the program running there
+set, or `shell'.  The last names the row rather than claiming what runs
+in the pane: herdr reports nothing else about it, and the identifier
+beside the name is what picks it out."
+  (or (gethash "agent" pane)
+      (let ((title (gethash "terminal_title_stripped" pane)))
+        (and title (not (string-empty-p title)) title))
+      "shell"))
+
 
 (defun herdr-spaces--name (workspace)
   "Return the name to show for WORKSPACE, marked when it is read only.
@@ -411,19 +482,21 @@ workspace is focused."
 
 (defun herdr-spaces--pane-at-point ()
   "Return a pane to visit for the row at point.
-A space offers the pane of its first member, so that a group heading
-leads somewhere rather than refusing."
+A pane row is that pane.  A workspace or a space leads to the pane of
+its active tab, so that a heading leads somewhere rather than refusing."
   (let* ((section (magit-current-section))
          (type (and section (oref section type)))
-         (value (and section (oref section value)))
-         (workspace (pcase type
-                      ('herdr-workspace (herdr-session-workspace value))
-                      ('herdr-space (car (herdr-spaces--members value))))))
-    (unless workspace
-      (user-error "No workspace at point"))
-    (or (herdr-spaces--pane workspace)
-        (user-error "Workspace %s has no pane"
-                    (gethash "workspace_id" workspace)))))
+         (value (and section (oref section value))))
+    (if (eq type 'herdr-pane)
+        value
+      (let ((workspace (pcase type
+                         ('herdr-workspace (herdr-session-workspace value))
+                         ('herdr-space (car (herdr-spaces--members value))))))
+        (unless workspace
+          (user-error "No workspace at point"))
+        (or (herdr-spaces--pane workspace)
+            (user-error "Workspace %s has no pane"
+                        (gethash "workspace_id" workspace)))))))
 
 (defun herdr-spaces--members (key)
   "Return the workspaces of the space called KEY."

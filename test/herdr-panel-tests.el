@@ -802,6 +802,42 @@ Both ask here, so the prefix argument means one thing in both."
                    '("●  project  codex  same… p1"
                      "●  project  codex  same… p2")))))
 
+;;; Showing A Terminal Where It Already Is
+
+(ert-deftest herdr-panel--display-in-main:keeps-a-buffer-in-its-own-window ()
+  "A terminal on screen is shown where it is, not moved to the main window.
+Two terminals side by side and a visit to the right-hand one used to
+put that buffer in the left window as well: the same pane displayed
+twice, and the other one gone from the frame."
+  (let ((left (generate-new-buffer " *herdr-panel-test-left*"))
+        (right (generate-new-buffer " *herdr-panel-test-right*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) left)
+          (let ((other (split-window-right)))
+            (set-window-buffer other right)
+            (should (eq (herdr-panel--display-in-main right nil) other))
+            (should (eq (window-buffer other) right))
+            ;; The window a visit would otherwise have taken over.
+            (should (eq (window-buffer (selected-window)) left))))
+      (kill-buffer left)
+      (kill-buffer right))))
+
+(ert-deftest herdr-panel--display-in-main:uses-the-main-window-otherwise ()
+  "A terminal nowhere on the frame still lands in the main window."
+  (let ((shown (generate-new-buffer " *herdr-panel-test-shown*"))
+        (hidden (generate-new-buffer " *herdr-panel-test-hidden*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (set-window-buffer (selected-window) shown)
+          (should (eq (herdr-panel--display-in-main hidden nil)
+                      (selected-window)))
+          (should (eq (window-buffer (selected-window)) hidden)))
+      (kill-buffer shown)
+      (kill-buffer hidden))))
+
 ;;; _
 (provide 'herdr-panel-tests)
 ;; Local Variables:

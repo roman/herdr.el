@@ -59,12 +59,6 @@ without a rule they read as one list under two headings."
   :group 'herdr-panel
   :type 'boolean)
 
-(defcustom herdr-agents-separator "›"
-  "What stands between a workspace and the window inside it."
-  :package-version '(herdr . "0.1.0")
-  :group 'herdr-panel
-  :type 'string)
-
 (defcustom herdr-agents-hidden-kinds nil
   "Kinds of agent this panel leaves out.
 Anything herdr reports as an agent appears here, which includes what a
@@ -206,33 +200,28 @@ are left out."
 
 (defun herdr-agents--entry (agent current)
   "Return the row for AGENT, emphasised against the CURRENT pane.
-Which workspace and window an agent sits in is what tells two agents
-of the same kind apart, so that names the row and the kind follows it
-rather than the other way round."
+One line: the status mark, the kind as its glyph, and what the agent
+is working on.  The task is what tells two agents apart, and it changes
+while the workspace they sit in does not, so the row spends its width
+on that and leaves the workspace to the Spaces panel."
   (list :status (herdr-session-status agent)
         :emphasis (herdr-panel-emphasis (gethash "pane_id" agent) current)
         :id (gethash "pane_id" agent)
-        :label (herdr-agents--where agent)
-        :aside (herdr-agents--kind agent)
-        :detail (herdr-agents--detail agent)))
+        :label (herdr-agents--name agent)))
 
 (defun herdr-agents--insert (agent current)
   "Insert an entry for AGENT, emphasised against the CURRENT pane."
   (magit-insert-section (herdr-agent (gethash "pane_id" agent))
     (herdr-panel-insert-entry (herdr-agents--entry agent current))))
 
-(defun herdr-agents--where (agent)
-  "Return where AGENT is: its workspace, and its window within it.
-The window is left out when the workspace holds only one, where it
-would be a number that never changes and never distinguishes."
-  (let* ((name (herdr-agents--workspace-name agent))
-         (tab (herdr-agents--tab agent)))
-    (if tab
-        (concat name
-                (herdr-panel-text (concat " " herdr-agents-separator " ")
-                                  'herdr-panel-separator)
-                (herdr-panel-text tab 'herdr-panel-window))
-      name)))
+(defun herdr-agents--name (agent)
+  "Return AGENT's glyph and the title of what it is working on.
+The workspace stands in for a title herdr has not been told: a row has
+to say which agent it is, and an empty one says nothing at all."
+  (let ((glyph (herdr-agents-glyph agent))
+        (title (or (herdr-session-agent-title agent)
+                   (herdr-agents--workspace-name agent))))
+    (if glyph (concat glyph " " title) title)))
 
 (defun herdr-agents--workspace-name (agent)
   "Return the workspace name for AGENT."
@@ -242,18 +231,7 @@ would be a number that never changes and never distinguishes."
         (gethash "label" workspace)
       (gethash "workspace_id" agent))))
 
-(defun herdr-agents--tab (agent)
-  "Return the name of the window AGENT sits in, or nil when it is alone."
-  (let ((tabs (herdr-session-tabs (gethash "workspace_id" agent))))
-    (when (cdr tabs)
-      (when-let* ((tab (seq-find (lambda (tab)
-                                   (equal (gethash "tab_id" tab)
-                                          (gethash "tab_id" agent)))
-                                 tabs)))
-        (or (gethash "label" tab)
-            (number-to-string (gethash "number" tab)))))))
-
-(defun herdr-agents--kind (agent)
+(defun herdr-agents-glyph (agent)
   "Return what kind of agent AGENT is, as a glyph or as a name.
 See `herdr-agents-icons' for which kinds have a glyph."
   (when-let* ((kind (or (gethash "agent" agent)
@@ -261,12 +239,6 @@ See `herdr-agents-icons' for which kinds have a glyph."
     (herdr-panel-text (or (cdr (assoc kind herdr-agents-icons)) kind)
                       (or (cdr (assoc kind herdr-agents-icon-faces))
                           'herdr-panel-agent))))
-
-(defun herdr-agents--detail (agent)
-  "Return AGENT's title unless it repeats the workspace name."
-  (let ((title (herdr-session-agent-title agent)))
-    (unless (equal title (herdr-agents--workspace-name agent))
-      title)))
 
 (defun herdr-agents--pane-at-point ()
   "Return the pane of the row at point, or signal when there is none."

@@ -285,16 +285,24 @@ selected: leave the panel and every row is its own colour again."
     ("done" . herdr-panel-done)
     ("working" . herdr-panel-working)
     ("idle" . herdr-panel-idle)
-    ("unknown" . herdr-panel-unknown))
-  "Face for each agent status herdr reports.")
+    ("unknown" . herdr-panel-unknown)
+    ("several" . herdr-panel-unknown))
+  "Face for each agent status herdr reports.
+`several' is not one of them.  See `herdr-panel-status-symbols'.")
 
 (defcustom herdr-panel-status-symbols
   '(("blocked" . "●") ("done" . "●") ("working" . "●")
-    ("idle" . "○") ("unknown" . "·"))
+    ("idle" . "○") ("unknown" . "·") ("several" . "·"))
   "Mark shown beside each agent status.
 These are herdr's own marks: a filled circle while an agent has
 something to say, a hollow one once it has been seen, and a dot where
-there is no agent at all."
+there is no agent at all.
+
+`several' is not a status herdr reports.  It is what a row carries
+when it stands for more than one pane and so has no single state of
+its own, and it is here rather than hard coded so that a configuration
+giving the others their own marks can give this one a mark that says
+`more than one' beside them."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
   :type '(alist :key-type string :value-type string))
@@ -541,6 +549,21 @@ mirror is the one holding it."
                         (buffer-local-value 'herdr-term--writable buffer)))
                  (buffer-list))
        t))
+
+(defun herdr-panel-tab-name (node)
+  "Return the name of the window NODE sits in, or nil when there is one.
+NODE is any tree node carrying a tab and a workspace: a pane, or an
+agent.  A workspace of a single tab names it with a number that never
+tells two rows apart, so a row in one says nothing by carrying it."
+  (let ((tabs (herdr-session-tabs (gethash "workspace_id" node))))
+    (when (cdr tabs)
+      (when-let* ((tab (seq-find (lambda (other)
+                                   (equal (gethash "tab_id" other)
+                                          (gethash "tab_id" node)))
+                                 tabs)))
+        (herdr-panel-text (or (gethash "label" tab)
+                              (number-to-string (gethash "number" tab)))
+                          'herdr-panel-window)))))
 
 (defun herdr-panel-emphasis (pane current)
   "Return how to draw a row for PANE, given the CURRENT pane."
@@ -1326,10 +1349,16 @@ of the side windows the panels themselves live in."
         (car windows))))
 
 (defun herdr-panel--display-in-main (buffer _alist)
-  "Show BUFFER in the main window, for `display-buffer'.
+  "Show BUFFER where it already is, or in the main window, for `display-buffer'.
 Return that window, or nil when the frame has none to offer, which
-leaves `display-buffer' to go on looking."
-  (when-let* ((window (herdr-panel-main-window)))
+leaves `display-buffer' to go on looking.
+
+A window already showing BUFFER wins.  Without that, visiting a pane
+that is on screen puts it in the main window as well, and a frame
+holding two terminals side by side ends up showing one of them twice
+with the other evicted."
+  (when-let* ((window (or (get-buffer-window buffer)
+                          (herdr-panel-main-window))))
     (set-window-buffer window buffer)
     window))
 
