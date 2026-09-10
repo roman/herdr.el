@@ -70,20 +70,65 @@ and none of what it answers is what these tests are about."
                      (progn (goto-char (point-min))
                             (search-forward "project")))))))))
 
+(ert-deftest herdr-spaces--insert-machine:sizes-the-remote-status-icon ()
+  "The size face precedes the color face on a remote status icon."
+  (with-temp-buffer
+    (magit-insert-section (herdr-spaces-tests-root)
+      (herdr-spaces--insert-machine
+       '(:id "baker" :label "baker" :status online :snapshot nil)
+       nil "local"))
+    (goto-char (point-min))
+    (search-forward herdr-spaces-remote-status-icon)
+    (should (equal (ensure-list (get-text-property (match-beginning 0) 'face))
+                   '(herdr-spaces-machine-status-icon herdr-panel-online)))))
+
 (ert-deftest herdr-spaces--scoped-id:separates-remote-rows ()
   "Equal remote row identifiers remain distinct across machines."
   (let ((herdr-spaces--machine-id "baker")
         (herdr-spaces--local-machine-p nil))
     (should (equal (herdr-spaces--scoped-id "w1:p1") "baker:w1:p1"))))
 
+(ert-deftest herdr-spaces--emphasis:keeps-an-open-remote-pane-visible ()
+  "A remote workspace stays open while its machine-specific buffer exists."
+  (herdr-spaces-with-snapshot
+      (herdr-spaces-tests--split "w1" "w1:p1")
+    (with-temp-buffer
+      (setq-local herdr-term--pane "w1:p1")
+      (setq-local herdr-term--connection '(:id "baker"))
+      (let ((herdr-spaces--machine-id "baker")
+            (herdr-spaces--local-machine-p nil))
+        (should (eq (herdr-spaces--emphasis "w1" nil) 'open))
+        (should (eq (plist-get (herdr-spaces--pane-entry
+                                (car (herdr-session-panes)) nil)
+                               :emphasis)
+                    'open))))))
+
 (ert-deftest herdr-spaces--pane-entry:keeps-a-colliding-remote-pane-closed ()
-  "A remote pane cannot inherit the state of an open local pane."
-  (let ((herdr-spaces--machine-id "baker")
-        (herdr-spaces--local-machine-p nil)
+  "A pane is open only for the machine whose matching buffer exists."
+  (let ((local-buffer (generate-new-buffer " *herdr-local-test*"))
+        (remote-buffer (generate-new-buffer " *herdr-remote-test*"))
         (pane (make-hash-table :test #'equal)))
-    (puthash "pane_id" "w1:p1" pane)
-    (should (eq (plist-get (herdr-spaces--pane-entry pane nil) :emphasis)
-                'closed))))
+    (unwind-protect
+        (progn
+          (with-current-buffer local-buffer
+            (setq-local herdr-term--pane "w1:p1")
+            (setq-local herdr-term--connection nil))
+          (with-current-buffer remote-buffer
+            (setq-local herdr-term--pane "w1:p1")
+            (setq-local herdr-term--connection '(:id "atlas")))
+          (puthash "pane_id" "w1:p1" pane)
+          (let ((herdr-spaces--machine-id "baker")
+                (herdr-spaces--local-machine-p nil))
+            (should (eq (plist-get (herdr-spaces--pane-entry pane nil)
+                                   :emphasis)
+                        'closed)))
+          (let ((herdr-spaces--machine-id "atlas")
+                (herdr-spaces--local-machine-p nil))
+            (should (eq (plist-get (herdr-spaces--pane-entry pane nil)
+                                   :emphasis)
+                        'open))))
+      (kill-buffer local-buffer)
+      (kill-buffer remote-buffer))))
 
 (ert-deftest herdr-spaces--pane-entry:highlights-the-selected-remote-pane ()
   (let ((herdr-spaces--machine-id "baker")
@@ -390,6 +435,19 @@ workspaces of one."
       (let ((drawn (buffer-substring-no-properties (point-min) (point-max))))
         (should (string-match-p "(w1:p1)" drawn))
         (should (string-match-p "(w1:p2)" drawn))))))
+
+(ert-deftest herdr-spaces--insert-workspace:fills-the-selected-subtree ()
+  "A selected workspace fills its heading and each child pane row."
+  (herdr-spaces-with-snapshot (herdr-spaces-tests--split "w1" "w1:p1" "w1:p2")
+    (with-temp-buffer
+      (let ((workspace (car (herdr-session-workspaces))))
+        (magit-insert-section (herdr-spaces-tests-root)
+          (herdr-spaces--insert-workspace workspace "w1" "w1:p1" " ")))
+      (goto-char (point-min))
+      (search-forward "(w1:p2)")
+      (should (memq 'herdr-spaces-current-workspace
+                    (ensure-list (get-text-property (match-beginning 0)
+                                                    'face)))))))
 
 (ert-deftest herdr-spaces--entry:stops-claiming-one-activity-for-several ()
   "A workspace of several panes carries no activity of its own.

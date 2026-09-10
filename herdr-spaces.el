@@ -93,6 +93,81 @@ a very large repository is worth knowing about."
   :group 'herdr-panel
   :type 'string)
 
+(defcustom herdr-spaces-remote-status-icon "●"
+  "Status icon shown after each remote machine name."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'string)
+
+(defface herdr-spaces-machine-icon
+  '((t :inherit herdr-spaces-machine :height 0.8))
+  "Face for local and remote machine icons."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-machine-status-icon
+  '((t :height 0.75))
+  "Face controlling the size of remote machine status icons."
+  :group 'herdr-panel)
+
+(defcustom herdr-spaces-machine-icon-face 'herdr-spaces-machine-icon
+  "Face used for local and remote machine icons."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'face)
+
+(defface herdr-spaces-title
+  '((t :inherit magit-section-heading :weight bold :height 1.2))
+  "Face for the Spaces panel title."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-machine
+  '((((background dark)) :foreground "#89b4fa" :weight bold :height 1.1)
+    (((background light)) :foreground "#1e66f5" :weight bold :height 1.1))
+  "Face for machine headings."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-space
+  '((((background dark)) :foreground "#cba6f7" :weight semi-bold :height 1.05)
+    (((background light)) :foreground "#8839ef" :weight semi-bold :height 1.05))
+  "Face for grouped space headings."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-workspace
+  '((((background dark)) :foreground "#94e2d5" :weight medium)
+    (((background light)) :foreground "#179299" :weight medium))
+  "Face for workspace headings."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-pane
+  '((((background dark)) :foreground "#a6adc8" :height 0.95)
+    (((background light)) :foreground "#6c6f85" :height 0.95))
+  "Face for pane headings."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-current-machine
+  '((((background dark)) :background "#182235" :extend t)
+    (((background light)) :background "#e8eefc" :extend t))
+  "Face covering the selected machine subtree."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-current-space
+  '((((background dark)) :background "#24243b" :extend t)
+    (((background light)) :background "#eee8fa" :extend t))
+  "Face covering the selected space subtree."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-current-workspace
+  '((((background dark)) :background "#203335" :extend t)
+    (((background light)) :background "#e3f3f0" :extend t))
+  "Face covering the selected workspace subtree."
+  :group 'herdr-panel)
+
+(defface herdr-spaces-current-pane
+  '((((background dark)) :background "#35445c" :extend t)
+    (((background light)) :background "#cdd9f0" :extend t))
+  "Face marking the exact selected pane."
+  :group 'herdr-panel)
+
 (defvar-local herdr-spaces--machine-timer nil
   "Timer that refreshes machine states in this spaces buffer.")
 
@@ -246,7 +321,8 @@ for a row already in the prompt."
   (with-current-buffer (get-buffer-create herdr-spaces-buffer-name)
     (herdr-panel-with-redraw
       (magit-insert-section (herdr-spaces-root)
-        (herdr-panel-insert-title "Spaces")
+        (herdr-panel-insert-title
+         (herdr-panel-text "Spaces" 'herdr-spaces-title))
         (let* ((terminal (herdr-panel-current-terminal-buffer))
                (pane (and terminal (herdr-panel--buffer-pane terminal)))
                (machine-id (herdr-spaces--buffer-machine-id terminal)))
@@ -334,6 +410,17 @@ large repository and is rarely what the count is wanted for."
                          (buffer-local-value 'herdr-term--connection buffer))))
     (or (plist-get connection :id) "local")))
 
+(defun herdr-spaces--pane-open-p (pane-id)
+  "Return non-nil when a buffer mirrors PANE-ID on the rendered machine."
+  (and pane-id
+       (seq-some
+        (lambda (buffer)
+          (and (equal (herdr-panel--buffer-pane buffer) pane-id)
+               (equal (herdr-spaces--buffer-machine-id buffer)
+                      herdr-spaces--machine-id)))
+        (buffer-list))
+       t))
+
 (defun herdr-spaces--insert (space current pane &optional indent)
   "Insert SPACE, marking the workspace CURRENT wherever it appears.
 PANE is the pane on screen, which marks a pane row the same way.
@@ -350,19 +437,24 @@ all there is left to say that something inside is waiting."
         (status (plist-get space :agent-status)))
     (if (cdr workspaces)
         (magit-insert-section (herdr-space (plist-get space :key))
-          (let ((start (point)))
+          (let* ((start (point))
+                 (emphasis (herdr-spaces--space-emphasis space current))
+                 (selected (eq emphasis 'current)))
             (magit-insert-heading
               (concat indent (herdr-panel-status-string status)
                       " " (herdr-panel--propertize (plist-get space :label)
-                                                   'magit-section-heading)))
+                                                   'herdr-spaces-space)))
             (herdr-panel-mark-attention
              start (point)
              (list :status status
                    :id (herdr-spaces--scoped-id (plist-get space :key))
-                   :emphasis (herdr-spaces--space-emphasis space current))))
+                   :emphasis emphasis))
           (dolist (workspace workspaces)
             (herdr-spaces--insert-workspace
-             workspace current pane (concat indent "  "))))
+             workspace current pane (concat indent "  ")))
+          (when selected
+            (herdr-panel--add-face start (point)
+                                   'herdr-spaces-current-space 'beneath))))
       (herdr-spaces--insert-workspace (car workspaces) current pane indent)))))
 
 (defun herdr-spaces--insert-machine (machine pane selected-machine-id)
@@ -373,13 +465,20 @@ PANE and SELECTED-MACHINE-ID identify the terminal on screen."
          (status (symbol-name (plist-get machine :status)))
          (snapshot (plist-get machine :snapshot)))
     (magit-insert-section (herdr-machine machine-id)
+      (let ((start (point))
+            (selected (equal machine-id selected-machine-id)))
       (magit-insert-heading
         (concat " " (herdr-panel-text (if local-p
                                            herdr-spaces-local-machine-icon
                                          herdr-spaces-remote-machine-icon)
-                                       (herdr-panel-status-face status))
+                                       herdr-spaces-machine-icon-face)
                 " " (herdr-panel--propertize (plist-get machine :label)
-                                               'magit-section-heading)))
+                                               'herdr-spaces-machine)
+                (unless local-p
+                  (concat " "
+                          (herdr-panel-text herdr-spaces-remote-status-icon
+                                            (list 'herdr-spaces-machine-status-icon
+                                                  (herdr-panel-status-face status)))))))
       (when snapshot
         (let ((herdr-session--snapshot snapshot)
               (herdr-spaces--machine-id machine-id)
@@ -391,7 +490,10 @@ PANE and SELECTED-MACHINE-ID identify the terminal on screen."
               (herdr-spaces--insert space
                                   current
                                   selected
-                                  "   "))))))))
+                                  "   "))))
+      (when selected
+        (herdr-panel--add-face start (point)
+                               'herdr-spaces-current-machine 'beneath)))))))
 
 (defun herdr-spaces--scoped-id (id)
   "Return ID namespaced to the machine being rendered."
@@ -408,15 +510,21 @@ because where a row sits in a column is the column's business and not
 the row's."
   (let ((panes (herdr-spaces--workspace-panes workspace)))
     (magit-insert-section (herdr-workspace (gethash "workspace_id" workspace))
-      (herdr-panel-insert-entry
-       (append (list :indent indent)
-               (herdr-spaces--entry workspace current (cdr panes))))
-      ;; Only where there are several.  One pane is the workspace, and a
-      ;; row repeating it under its own name would double every line of
-      ;; a column that is mostly workspaces of one.
-      (when (cdr panes)
-        (dolist (child panes)
-          (herdr-spaces--insert-pane child pane (concat indent "  ")))))))
+      (let ((selected (equal (gethash "workspace_id" workspace) current)))
+        (herdr-panel-insert-entry
+         (append (list :indent indent
+                       :current-face 'herdr-spaces-current-workspace)
+                 (herdr-spaces--entry workspace current (cdr panes))))
+        (let ((children-start (point)))
+          ;; Only where there are several.  One pane is the workspace, and a
+          ;; row repeating it under its own name would double every line of
+          ;; a column that is mostly workspaces of one.
+          (when (cdr panes)
+            (dolist (child panes)
+              (herdr-spaces--insert-pane child pane (concat indent "  "))))
+          (when selected
+            (herdr-panel--add-face children-start (point)
+                                   'herdr-spaces-current-workspace 'beneath)))))))
 
 (defun herdr-spaces--entry (workspace current &optional pane-rows)
   "Return the row for WORKSPACE, emphasised against the CURRENT one.
@@ -433,7 +541,8 @@ with the rest."
         :emphasis (herdr-spaces--emphasis (gethash "workspace_id" workspace)
                                           current)
         :id (herdr-spaces--scoped-id (gethash "workspace_id" workspace))
-        :label (herdr-spaces--name workspace)
+        :label (herdr-panel-text (herdr-spaces--name workspace)
+                                 'herdr-spaces-workspace)
         :aside (unless pane-rows (herdr-spaces--pane-name workspace))
         :detail (herdr-spaces--detail workspace)))
 
@@ -441,18 +550,21 @@ with the rest."
   "Insert the row for PANE, emphasised against CURRENT, behind INDENT."
   (magit-insert-section (herdr-pane (gethash "pane_id" pane))
     (herdr-panel-insert-entry
-     (append (list :indent indent) (herdr-spaces--pane-entry pane current)))))
+     (append (list :indent indent
+                   :current-face 'herdr-spaces-current-pane)
+             (herdr-spaces--pane-entry pane current)))))
 
 (defun herdr-spaces--pane-entry (pane current)
   "Return the row for PANE, emphasised against the CURRENT pane."
   (list :status (herdr-session-status pane)
         :emphasis (if (equal (gethash "pane_id" pane) current)
                       'current
-                    (if herdr-spaces--local-machine-p
-                        (herdr-panel-emphasis (gethash "pane_id" pane) current)
+                    (if (herdr-spaces--pane-open-p (gethash "pane_id" pane))
+                        'open
                       'closed))
         :id (herdr-spaces--scoped-id (gethash "pane_id" pane))
-        :label (herdr-spaces--pane-label pane)
+        :label (herdr-panel-text (herdr-spaces--pane-label pane)
+                                 'herdr-spaces-pane)
         :aside (format "(%s)" (gethash "pane_id" pane))
         :detail (herdr-panel-tab-name pane)))
 
@@ -560,10 +672,10 @@ nothing."
 A workspace counts as open when any one of its panes is: it is the
 workspace the row stands for, not a particular pane of it."
   (cond ((equal workspace-id current) 'current)
-        ((not herdr-spaces--local-machine-p) 'closed)
         ((seq-some (lambda (pane)
                      (and (equal (gethash "workspace_id" pane) workspace-id)
-                          (herdr-panel-pane-open-p (gethash "pane_id" pane))))
+                          (herdr-spaces--pane-open-p
+                           (gethash "pane_id" pane))))
                    (herdr-session-panes))
          'open)
         (t 'closed)))

@@ -461,6 +461,8 @@ SPEC is a plist:
                name: a string, a list of strings for several lines, or
                nil for an entry of one line
   `:indent'    what precedes the mark, for an entry inside a group
+  `:current-face' the face that fills a current entry, or
+               `herdr-panel-current' when omitted
 
 An entry is one row however many lines it takes.  It is filled as one
 when it is `current', and moving between rows steps over it whole.
@@ -509,7 +511,10 @@ moments it pulses, and only where a buffer here mirrors the row."
     (when (eq emphasis 'current)
       ;; Beneath, so that the mark and the fields keep their colours and
       ;; only the background comes from here.
-      (herdr-panel--add-face start (point) 'herdr-panel-current 'beneath))
+      (herdr-panel--add-face start (point)
+                             (or (plist-get spec :current-face)
+                                 'herdr-panel-current)
+                             'beneath))
     ;; Last, so that this fill is the one in front of the current row's.
     (herdr-panel-mark-attention start (point) spec)))
 

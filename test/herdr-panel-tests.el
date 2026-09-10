@@ -377,6 +377,20 @@ the name on the current row is bold either way."
         (should (< (seq-position worn 'herdr-panel-attention-blocked)
                    (seq-position worn 'herdr-panel-current)))))))
 
+(ert-deftest herdr-panel-insert-entry:uses-a-panel-specific-current-face ()
+  "A panel can give its current row a hierarchy-specific fill.
+The attention fill stays in front, so a blocked current pane still
+flashes while its settled state remains distinct from its parents."
+  (herdr-panel-tests-pulsing "w1:p1"
+    (with-temp-buffer
+      (herdr-panel-insert-entry
+       '(:status "blocked" :id "w1:p1" :emphasis current
+         :current-face herdr-spaces-current-pane :label "herdr"))
+      (let ((worn (herdr-panel-tests-worn (point-min))))
+        (should (memq 'herdr-spaces-current-pane worn))
+        (should (< (seq-position worn 'herdr-panel-attention-blocked)
+                   (seq-position worn 'herdr-spaces-current-pane)))))))
+
 (ert-deftest herdr-panel-insert-entry:leaves-a-row-nobody-has-opened-unfilled ()
   "A row this Emacs has no buffer for does not flash at it.
 A flash is for the corner of the eye of somebody working in the
