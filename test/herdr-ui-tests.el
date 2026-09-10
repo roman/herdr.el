@@ -36,6 +36,10 @@
 (require 'herdr-session-tests)
 (require 'herdr-ui)
 
+(ert-deftest herdr-ui-panels:keeps-machines-inside-spaces ()
+  "The side column has no separate machines panel."
+  (should-not (assq 'herdr-machines-panel herdr-ui-panels)))
+
 ;; Declared rather than required: the tab commands read the pane a herdr
 ;; terminal mirrors, and these tests bind it themselves rather than pull
 ;; in herdr-term and, with it, ghostel and a native module.
@@ -267,17 +271,45 @@ The panel can put a pane under a heading; a candidate stands alone."
 (ert-deftest herdr-ui--read-pane:offers-every-pane-of-the-session ()
   "Both panes are offered, the plain shell as well as the agent's."
   (herdr-ui-with-session
-    (herdr-panel-tests-offline
-      (herdr-panel-tests-choosing 1
-        (should (equal (herdr-ui--read-pane) "w1:p2"))
-        (should (eql (length herdr-panel-tests--offered) 2))))))
+    (cl-letf (((symbol-function 'herdr-machines-refresh-online)
+               (lambda ()
+                 (list (list :id "local" :label "Local" :status 'online
+                             :snapshot herdr-session--snapshot)))))
+      (herdr-panel-tests-offline
+        (herdr-panel-tests-choosing 1
+          (should (equal (plist-get (herdr-ui--read-pane) :pane) "w1:p2"))
+          (should (eql (length herdr-panel-tests--offered) 2)))))))
+
+(ert-deftest herdr-ui--read-pane:offers-a-host-column-across-machines ()
+  (herdr-ui-with-session
+    (let ((local-snapshot herdr-session--snapshot)
+          (remote-snapshot herdr-session--snapshot))
+      (cl-letf (((symbol-function 'herdr-machines-refresh-online)
+                 (lambda ()
+                   (list (list :id "local" :label "Local" :status 'online
+                               :snapshot local-snapshot)
+                         (list :id "baker" :label "baker" :status 'online
+                               :snapshot remote-snapshot)))))
+        (herdr-panel-tests-offline
+          (herdr-panel-tests-choosing 2
+            (let ((target (herdr-ui--read-pane)))
+              (should (equal (plist-get (plist-get target :machine) :id)
+                             "baker"))
+              (should (string-match-p "  baker  "
+                                      (mapconcat #'identity
+                                                 herdr-panel-tests--offered
+                                                 "\n"))))))))))
 
 (ert-deftest herdr-ui--read-pane:refuses-an-empty-session ()
   "No panes says so rather than raising an empty prompt."
   (let ((herdr-spaces-git nil))
     (herdr-session-with-snapshot (list :workspaces (vector) :panes (vector))
-      (herdr-panel-tests-offline
-        (should-error (herdr-ui--read-pane) :type 'user-error)))))
+      (cl-letf (((symbol-function 'herdr-machines-refresh-online)
+                 (lambda ()
+                   (list (list :id "local" :label "Local" :status 'online
+                               :snapshot herdr-session--snapshot)))))
+        (herdr-panel-tests-offline
+          (should-error (herdr-ui--read-pane) :type 'user-error))))))
 
 ;;; Tabs Of The Terminal's Workspace
 

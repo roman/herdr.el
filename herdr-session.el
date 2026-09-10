@@ -161,11 +161,12 @@ this again restarts the subscription, which is how a session recovers
 after the server was restarted."
   (interactive)
   (herdr-session-stop)
-  (herdr-session-refresh)
-  (setq herdr-session--subscription
-        (herdr-api-subscribe herdr-session-events
-                             #'herdr-session--note-event
-                             #'herdr-session--note-closed))
+  (let ((herdr-api-socket (default-value 'herdr-api-socket)))
+    (herdr-session-refresh)
+    (setq herdr-session--subscription
+          (herdr-api-subscribe herdr-session-events
+                               #'herdr-session--note-event
+                               #'herdr-session--note-closed)))
   (when herdr-session-poll-interval
     (setq herdr-session--poll-timer
           (run-at-time herdr-session-poll-interval
@@ -200,7 +201,8 @@ This blocks, so it must not run from a process filter; see
 `herdr-session--note-event'."
   (interactive "p")
   (setq herdr-session--snapshot
-        (gethash "snapshot" (herdr-api-request "session.snapshot")))
+        (let ((herdr-api-socket (default-value 'herdr-api-socket)))
+          (gethash "snapshot" (herdr-api-request "session.snapshot"))))
   (herdr-session--note-finishes)
   (let ((fingerprint (herdr-session--fingerprint)))
     (when (or force (not (equal fingerprint herdr-session--fingerprint)))

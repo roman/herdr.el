@@ -161,6 +161,10 @@ it is supposed to kill."
     (should (equal (herdr-term--buffer-name "w1:p1")
                    "*herdr:w1:p1*"))))
 
+(ert-deftest herdr-term--buffer-name:includes-the-remote-machine ()
+  (should (equal (herdr-term--buffer-name "w1:p1" '(:label "Baker"))
+                 "*herdr:Baker:w1:p1*")))
+
 (ert-deftest herdr-term--rename-buffers:follows-a-new-title ()
   "An open terminal adopts a title changed after it was opened."
   (let ((buffer (generate-new-buffer "*herdr:w1:p1*"))

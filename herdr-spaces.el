@@ -41,7 +41,11 @@
 (require 'seq)
 
 (require 'herdr-panel)
+(require 'herdr-machines)
 (require 'herdr-session)
+
+(declare-function herdr-ui-visit-pane "herdr-ui" (pane &optional other))
+(declare-function evil-define-key* "evil-core" (state keymap key def &rest bindings))
 
 ;;; Options
 
@@ -77,14 +81,39 @@ a very large repository is worth knowing about."
   :group 'herdr-panel
   :type 'number)
 
+(defcustom herdr-spaces-local-machine-icon "⌂"
+  "Icon shown before the local machine in the spaces tree."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'string)
+
+(defcustom herdr-spaces-remote-machine-icon "☁"
+  "Icon shown before remote machines in the spaces tree."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'string)
+
+(defvar-local herdr-spaces--machine-timer nil
+  "Timer that refreshes machine states in this spaces buffer.")
+
+(defvar herdr-spaces--machine-id "local"
+  "Machine identifier used while rendering one machine subtree.")
+
+(defvar herdr-spaces--local-machine-p t
+  "Whether the machine subtree being rendered belongs to this host.")
+
 ;;; Keymaps
 
 (defvar-keymap herdr-spaces-mode-map
   :doc "Keymap for `herdr-spaces-mode'."
-  :parent herdr-panel-mode-map)
+  :parent herdr-panel-mode-map
+  "RET" #'herdr-spaces-visit-at-point
+  "<mouse-1>" #'herdr-spaces-visit-click)
 
 (with-eval-after-load 'evil
-  (herdr-panel-install-evil-keys herdr-spaces-mode-map))
+  (herdr-panel-install-evil-keys herdr-spaces-mode-map)
+  (evil-define-key* 'normal herdr-spaces-mode-map
+    (kbd "RET") #'herdr-spaces-visit-at-point))
 
 ;;; Mode
 
@@ -92,9 +121,39 @@ a very large repository is worth knowing about."
   "Major mode for the herdr spaces panel."
   :interactive nil
   (herdr-panel-init #'herdr-spaces-refresh #'herdr-spaces--pane-at-point)
+  (add-hook 'herdr-machines-change-hook #'herdr-spaces--refresh-existing)
+  (herdr-machines-refresh)
+  (setq herdr-spaces--machine-timer
+        (run-at-time herdr-machines-probe-interval
+                     herdr-machines-probe-interval
+                     #'herdr-spaces--poll-machines
+                     (current-buffer)))
+  (add-hook 'kill-buffer-hook #'herdr-spaces--cancel-machine-timer nil t)
+  (add-hook 'change-major-mode-hook
+            #'herdr-spaces--cancel-machine-timer nil t)
   ;; Nothing on the wire says a branch changed, so the panel has to say
   ;; so itself or a checkout would sit stale until something else moved.
   (add-hook 'herdr-session-fingerprint-functions #'herdr-spaces--git-marks))
+
+(defun herdr-spaces--poll-machines (buffer)
+  "Poll machine states for the live spaces BUFFER."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (herdr-machines-refresh)
+      (herdr-spaces-refresh))))
+
+(defun herdr-spaces--refresh-existing ()
+  "Refresh the spaces panel only when its buffer is still live."
+  (when-let* ((buffer (get-buffer herdr-spaces-buffer-name)))
+    (with-current-buffer buffer
+      (herdr-spaces-refresh))))
+
+(defun herdr-spaces--cancel-machine-timer ()
+  "Cancel this spaces buffer's machine refresh timer."
+  (when (timerp herdr-spaces--machine-timer)
+    (cancel-timer herdr-spaces--machine-timer)
+    (setq herdr-spaces--machine-timer nil))
+  (remove-hook 'herdr-machines-change-hook #'herdr-spaces--refresh-existing))
 
 (defun herdr-spaces--git-marks ()
   "Return the git state of every workspace, for the session fingerprint."
@@ -136,6 +195,19 @@ would."
   (interactive (list (herdr-spaces--read) current-prefix-arg))
   (herdr-panel-open-pane pane (herdr-panel-access other)))
 
+(defun herdr-spaces-visit-at-point (&optional other)
+  "Visit the local or remote pane represented by the row at point.
+OTHER reverses the configured visit access."
+  (interactive "P")
+  (require 'herdr-ui)
+  (herdr-ui-visit-pane (herdr-spaces--pane-at-point) other))
+
+(defun herdr-spaces-visit-click (event)
+  "Visit the local or remote pane represented by the clicked EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (herdr-spaces-visit-at-point current-prefix-arg))
+
 (defun herdr-spaces--read ()
   "Read a workspace with completion and return the pane to visit for it.
 A workspace herdr reports no pane in is left out, because there would
@@ -169,22 +241,17 @@ for a row already in the prompt."
     (nreverse rows)))
 
 (defun herdr-spaces-refresh ()
-  "Redraw the spaces panel from the session tree."
+  "Redraw the spaces panel from every machine's session tree."
   (interactive)
   (with-current-buffer (get-buffer-create herdr-spaces-buffer-name)
     (herdr-panel-with-redraw
       (magit-insert-section (herdr-spaces-root)
         (herdr-panel-insert-title "Spaces")
-        (let ((spaces (herdr-session-spaces))
-              (current (herdr-spaces--current-workspace))
-              (pane (herdr-panel-current-pane)))
-          (if spaces
-              (herdr-panel-insert-items
-               spaces
-               (lambda (space)
-                 (herdr-spaces--insert space current pane)))
-            (insert (propertize "  no spaces\n"
-                                'face 'herdr-panel-unknown))))))
+        (let* ((terminal (herdr-panel-current-terminal-buffer))
+               (pane (and terminal (herdr-panel--buffer-pane terminal)))
+               (machine-id (herdr-spaces--buffer-machine-id terminal)))
+          (dolist (machine (herdr-machines-list))
+            (herdr-spaces--insert-machine machine pane machine-id)))))
     (herdr-panel-settle-point)))
 
 ;;; Git
@@ -201,7 +268,8 @@ Each value has the form (WHEN . DESCRIPTION).")
 
 (defun herdr-spaces--git (directory)
   "Return a short description of DIRECTORY's git state, or nil."
-  (when (and herdr-spaces-git directory (file-directory-p directory))
+  (when (and herdr-spaces--local-machine-p
+             herdr-spaces-git directory (file-directory-p directory))
     (let ((cached (gethash directory herdr-spaces--git-cache)))
       (if (and cached (< (- (float-time) (car cached)) herdr-spaces-git-ttl))
           (cdr cached)
@@ -259,9 +327,17 @@ large repository and is rarely what the count is wanted for."
               (pane (herdr-session-pane pane-id)))
     (gethash "workspace_id" pane)))
 
-(defun herdr-spaces--insert (space current pane)
+(defun herdr-spaces--buffer-machine-id (buffer)
+  "Return the machine of terminal BUFFER."
+  (let ((connection (and buffer
+                         (boundp 'herdr-term--connection)
+                         (buffer-local-value 'herdr-term--connection buffer))))
+    (or (plist-get connection :id) "local")))
+
+(defun herdr-spaces--insert (space current pane &optional indent)
   "Insert SPACE, marking the workspace CURRENT wherever it appears.
 PANE is the pane on screen, which marks a pane row the same way.
+INDENT places the space below its parent machine.
 A space of one workspace is drawn as that workspace: giving it a group
 to expand would put every ungrouped checkout behind a heading that
 holds a single child.
@@ -269,23 +345,59 @@ holds a single child.
 A group carries the loudest status among its members, so a heading
 flashes for attention on the same terms a row does.  Collapsed, that is
 all there is left to say that something inside is waiting."
-  (let ((workspaces (plist-get space :workspaces))
+  (let ((indent (or indent " ")))
+    (let ((workspaces (plist-get space :workspaces))
         (status (plist-get space :agent-status)))
     (if (cdr workspaces)
         (magit-insert-section (herdr-space (plist-get space :key))
           (let ((start (point)))
             (magit-insert-heading
-              (concat " " (herdr-panel-status-string status)
+              (concat indent (herdr-panel-status-string status)
                       " " (herdr-panel--propertize (plist-get space :label)
                                                    'magit-section-heading)))
             (herdr-panel-mark-attention
              start (point)
              (list :status status
-                   :id (plist-get space :key)
+                   :id (herdr-spaces--scoped-id (plist-get space :key))
                    :emphasis (herdr-spaces--space-emphasis space current))))
           (dolist (workspace workspaces)
-            (herdr-spaces--insert-workspace workspace current pane "   ")))
-      (herdr-spaces--insert-workspace (car workspaces) current pane " "))))
+            (herdr-spaces--insert-workspace
+             workspace current pane (concat indent "  "))))
+      (herdr-spaces--insert-workspace (car workspaces) current pane indent)))))
+
+(defun herdr-spaces--insert-machine (machine pane selected-machine-id)
+  "Insert MACHINE as the parent of its spaces.
+PANE and SELECTED-MACHINE-ID identify the terminal on screen."
+  (let* ((machine-id (plist-get machine :id))
+         (local-p (equal machine-id "local"))
+         (status (symbol-name (plist-get machine :status)))
+         (snapshot (plist-get machine :snapshot)))
+    (magit-insert-section (herdr-machine machine-id)
+      (magit-insert-heading
+        (concat " " (herdr-panel-text (if local-p
+                                           herdr-spaces-local-machine-icon
+                                         herdr-spaces-remote-machine-icon)
+                                       (herdr-panel-status-face status))
+                " " (herdr-panel--propertize (plist-get machine :label)
+                                               'magit-section-heading)))
+      (when snapshot
+        (let ((herdr-session--snapshot snapshot)
+              (herdr-spaces--machine-id machine-id)
+              (herdr-spaces--local-machine-p local-p))
+          (let* ((selected (and (equal machine-id selected-machine-id) pane))
+                 (node (and selected (herdr-session-pane selected)))
+                 (current (and node (gethash "workspace_id" node))))
+            (dolist (space (herdr-session-spaces))
+              (herdr-spaces--insert space
+                                  current
+                                  selected
+                                  "   "))))))))
+
+(defun herdr-spaces--scoped-id (id)
+  "Return ID namespaced to the machine being rendered."
+  (if herdr-spaces--local-machine-p
+      id
+    (format "%s:%s" herdr-spaces--machine-id id)))
 
 (defun herdr-spaces--insert-workspace (workspace current pane indent)
   "Insert WORKSPACE, emphasised against CURRENT and preceded by INDENT.
@@ -320,7 +432,7 @@ with the rest."
   (list :status (if pane-rows "several" (herdr-session-status workspace))
         :emphasis (herdr-spaces--emphasis (gethash "workspace_id" workspace)
                                           current)
-        :id (gethash "workspace_id" workspace)
+        :id (herdr-spaces--scoped-id (gethash "workspace_id" workspace))
         :label (herdr-spaces--name workspace)
         :aside (unless pane-rows (herdr-spaces--pane-name workspace))
         :detail (herdr-spaces--detail workspace)))
@@ -334,8 +446,12 @@ with the rest."
 (defun herdr-spaces--pane-entry (pane current)
   "Return the row for PANE, emphasised against the CURRENT pane."
   (list :status (herdr-session-status pane)
-        :emphasis (herdr-panel-emphasis (gethash "pane_id" pane) current)
-        :id (gethash "pane_id" pane)
+        :emphasis (if (equal (gethash "pane_id" pane) current)
+                      'current
+                    (if herdr-spaces--local-machine-p
+                        (herdr-panel-emphasis (gethash "pane_id" pane) current)
+                      'closed))
+        :id (herdr-spaces--scoped-id (gethash "pane_id" pane))
         :label (herdr-spaces--pane-label pane)
         :aside (format "(%s)" (gethash "pane_id" pane))
         :detail (herdr-panel-tab-name pane)))
@@ -379,16 +495,17 @@ every row, where it would stop meaning anything."
   "Return non-nil when WORKSPACE-ID is mirrored here, but only to read.
 A workspace with several panes open counts as writable once any one of
 them is, because that is the one taking what is typed."
-  (let ((panes (seq-filter
+  (when herdr-spaces--local-machine-p
+    (let ((panes (seq-filter
                 (lambda (pane)
                   (and (equal (gethash "workspace_id" pane) workspace-id)
                        (herdr-panel-pane-open-p (gethash "pane_id" pane))))
                 (herdr-session-panes))))
-    (and panes
-         (not (seq-some (lambda (pane)
-                          (herdr-panel-pane-writable-p
-                           (gethash "pane_id" pane)))
-                        panes)))))
+      (and panes
+           (not (seq-some (lambda (pane)
+                            (herdr-panel-pane-writable-p
+                             (gethash "pane_id" pane)))
+                          panes))))))
 
 (defun herdr-spaces--pane-name (workspace)
   "Return the pane WORKSPACE leads to, in parentheses, or nil.
@@ -443,6 +560,7 @@ nothing."
 A workspace counts as open when any one of its panes is: it is the
 workspace the row stands for, not a particular pane of it."
   (cond ((equal workspace-id current) 'current)
+        ((not herdr-spaces--local-machine-p) 'closed)
         ((seq-some (lambda (pane)
                      (and (equal (gethash "workspace_id" pane) workspace-id)
                           (herdr-panel-pane-open-p (gethash "pane_id" pane))))
@@ -486,18 +604,39 @@ workspace is focused."
 A pane row is that pane.  A workspace or a space leads to the pane of
 its active tab, so that a heading leads somewhere rather than refusing."
   (let* ((section (magit-current-section))
+         (machine (herdr-spaces--machine-section section))
+         (machine-id (and machine (oref machine value)))
+         (machine-info (seq-find
+                        (lambda (item)
+                          (equal (plist-get item :id) machine-id))
+                        (herdr-machines-list)))
          (type (and section (oref section type)))
          (value (and section (oref section value))))
-    (if (eq type 'herdr-pane)
-        value
-      (let ((workspace (pcase type
-                         ('herdr-workspace (herdr-session-workspace value))
-                         ('herdr-space (car (herdr-spaces--members value))))))
-        (unless workspace
-          (user-error "No workspace at point"))
-        (or (herdr-spaces--pane workspace)
-            (user-error "Workspace %s has no pane"
-                        (gethash "workspace_id" workspace)))))))
+    (unless machine-info
+      (user-error "No machine at point"))
+    (let* ((herdr-session--snapshot (plist-get machine-info :snapshot))
+           (pane (if (eq type 'herdr-pane)
+                     value
+                   (let ((workspace
+                          (pcase type
+                            ('herdr-workspace
+                             (herdr-session-workspace value))
+                            ('herdr-space
+                             (car (herdr-spaces--members value))))))
+                     (unless workspace
+                       (user-error "No workspace at point"))
+                     (or (herdr-spaces--pane workspace)
+                         (user-error "Workspace %s has no pane"
+                                     (gethash "workspace_id" workspace)))))))
+      (if (equal machine-id "local")
+          pane
+        (list :machine machine-info :pane pane)))))
+
+(defun herdr-spaces--machine-section (section)
+  "Return SECTION's machine ancestor, or nil."
+  (while (and section (not (eq (oref section type) 'herdr-machine)))
+    (setq section (oref section parent)))
+  section)
 
 (defun herdr-spaces--members (key)
   "Return the workspaces of the space called KEY."

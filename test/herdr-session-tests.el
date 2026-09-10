@@ -385,6 +385,24 @@ where quitting is inhibited."
         (when (timerp herdr-session--timer)
           (cancel-timer herdr-session--timer))))))
 
+(ert-deftest herdr-session-refresh:ignores-a-remote-buffer-socket ()
+  (let ((herdr-api-socket "/tmp/local.sock")
+        used-socket)
+    (with-temp-buffer
+      (setq-local herdr-api-socket "/tmp/remote.sock")
+      (cl-letf (((symbol-function 'herdr-api-request)
+                 (lambda (_method &optional _params)
+                   (setq used-socket herdr-api-socket)
+                   (let ((result (make-hash-table :test #'equal)))
+                     (puthash "snapshot" (make-hash-table :test #'equal)
+                              result)
+                     result)))
+                ((symbol-function 'herdr-session--note-finishes) #'ignore)
+                ((symbol-function 'herdr-session--fingerprint)
+                 (lambda () nil)))
+        (herdr-session-refresh)))
+    (should (equal used-socket "/tmp/local.sock"))))
+
 (ert-deftest herdr-session-refresh:announces-only-real-changes ()
   "A snapshot that draws the same must not make the panels redraw.
 An agent's pane reports an event several times a second, and almost

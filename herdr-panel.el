@@ -102,6 +102,35 @@
   "Face for the mark of a pane herdr has detected no agent in."
   :group 'herdr-panel)
 
+(defface herdr-panel-connecting
+  '((((background dark)) :foreground "#ffcc00")
+    (((background light)) :foreground "#df8e1d")
+    (t :inherit warning))
+  "Face for a machine while its connection starts."
+  :group 'herdr-panel)
+
+(defface herdr-panel-online
+  '((((background dark)) :foreground "#2fe86b")
+    (((background light)) :foreground "#40a043")
+    (t :inherit success))
+  "Face for a connected machine."
+  :group 'herdr-panel)
+
+(defface herdr-panel-reconnecting
+  '((t :inherit herdr-panel-connecting))
+  "Face for a machine whose connection will be retried."
+  :group 'herdr-panel)
+
+(defface herdr-panel-attention
+  '((t :inherit herdr-panel-blocked))
+  "Face for a machine whose connection needs user action."
+  :group 'herdr-panel)
+
+(defface herdr-panel-disabled
+  '((t :inherit herdr-panel-unknown))
+  "Face for a disabled saved machine."
+  :group 'herdr-panel)
+
 (defface herdr-panel-label
   '((((background dark)) :foreground "#a6adc8")
     (((background light)) :foreground "#6c6f85")
@@ -286,14 +315,22 @@ selected: leave the panel and every row is its own colour again."
     ("working" . herdr-panel-working)
     ("idle" . herdr-panel-idle)
     ("unknown" . herdr-panel-unknown)
-    ("several" . herdr-panel-unknown))
-  "Face for each agent status herdr reports.
-`several' is not one of them.  See `herdr-panel-status-symbols'.")
+    ("several" . herdr-panel-unknown)
+    ("connecting" . herdr-panel-connecting)
+    ("online" . herdr-panel-online)
+    ("reconnecting" . herdr-panel-reconnecting)
+    ("attention" . herdr-panel-attention)
+    ("disabled" . herdr-panel-disabled))
+  "Face for each agent or machine status Herdr reports.
+`several' is a panel status.  See `herdr-panel-status-symbols'.")
 
 (defcustom herdr-panel-status-symbols
   '(("blocked" . "●") ("done" . "●") ("working" . "●")
-    ("idle" . "○") ("unknown" . "·") ("several" . "·"))
-  "Mark shown beside each agent status.
+    ("idle" . "○") ("unknown" . "·") ("several" . "·")
+    ("connecting" . "◐") ("online" . "●")
+    ("reconnecting" . "◐") ("attention" . "!")
+    ("disabled" . "·"))
+  "Mark shown beside each agent or machine status.
 These are herdr's own marks: a filled circle while an agent has
 something to say, a hollow one once it has been seen, and a dot where
 there is no agent at all.
@@ -501,13 +538,16 @@ without inferring boundaries from spaces in their text."
            (label-end (+ label-start label-length))
            (aside-start (1+ label-end))
            (fields
-            (list :status (buffer-substring status-start status-end)
-                  :label (buffer-substring label-start label-end)
-                  :aside (if (> aside-length 0)
-                             (buffer-substring
-                              aside-start (+ aside-start aside-length))
-                           "")
-                  :details nil)))
+            (append
+             (list :status (buffer-substring status-start status-end)
+                   :label (buffer-substring label-start label-end)
+                   :aside (if (> aside-length 0)
+                              (buffer-substring
+                               aside-start (+ aside-start aside-length))
+                            ""))
+             (and (plist-member spec :host)
+                  (list :host (or (plist-get spec :host) "")))
+             (list :details nil))))
       (goto-char (point-min))
       (forward-line 1)
       (let (details)
@@ -725,8 +765,15 @@ This has the form (CURRENT-PANE . OPEN-PANES).")
 The selected window wins.  Otherwise the most recently selected herdr
 terminal does, which is what keeps the highlight still while you work
 inside a panel rather than clearing it."
-  (or (herdr-panel--buffer-pane (window-buffer (selected-window)))
-      (seq-some #'herdr-panel--buffer-pane (buffer-list))))
+  (when-let* ((buffer (herdr-panel-current-terminal-buffer)))
+    (herdr-panel--buffer-pane buffer)))
+
+(defun herdr-panel-current-terminal-buffer ()
+  "Return the selected or most recently selected Herdr terminal buffer."
+  (let ((selected (window-buffer (selected-window))))
+    (if (herdr-panel--buffer-pane selected)
+        selected
+      (seq-find #'herdr-panel--buffer-pane (buffer-list)))))
 
 (defun herdr-panel--buffer-pane (buffer)
   "Return the herdr pane BUFFER mirrors, or nil when it mirrors none.
@@ -740,7 +787,8 @@ the variable below is declared here and given its value there, and
 ;; terminal, whose ghostel dependency loads a native module.
 (defvar herdr-term--pane)
 (defvar herdr-term--writable)
-(declare-function herdr-term-open "herdr-term" (pane &optional writable))
+(declare-function herdr-term-open "herdr-term"
+                  (pane &optional writable connection))
 (declare-function herdr-term-take-control "herdr-term" ())
 
 ;;; Panels
@@ -1154,12 +1202,14 @@ completion strings."
          (push detail locations))
         (t
          (push detail titles))))
-    (list (plist-get fields :status)
-          (plist-get fields :label)
-          (plist-get fields :aside)
-          (herdr-panel--join-fields (nreverse titles))
-          (herdr-panel--join-fields (nreverse locations))
-          (herdr-panel--join-fields (nreverse repositories)))))
+    (append (list (plist-get fields :status)
+                  (plist-get fields :label)
+                  (plist-get fields :aside))
+            (and (plist-member fields :host)
+                 (list (plist-get fields :host)))
+            (list (herdr-panel--join-fields (nreverse titles))
+                  (herdr-panel--join-fields (nreverse locations))
+                  (herdr-panel--join-fields (nreverse repositories))))))
 
 (defun herdr-panel--join-fields (fields)
   "Join completion FIELDS while preserving their text properties."
@@ -1186,8 +1236,9 @@ completion strings."
     (dolist (row rows)
       (setq widths
             (seq-mapn #'max widths (mapcar #'string-width row))))
-    (setf (nth 3 widths)
-          (min herdr-panel-visit-title-width (nth 3 widths)))
+    (let ((title-index (if (= (length widths) 7) 4 3)))
+      (setf (nth title-index widths)
+            (min herdr-panel-visit-title-width (nth title-index widths))))
     widths))
 
 (defun herdr-panel--format-completion-columns (columns widths)

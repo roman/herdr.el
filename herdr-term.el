@@ -188,6 +188,9 @@ which makes it the record of whether that connection ever synced.")
 (defvar-local herdr-term--resize-timer nil
   "Timer of a pending resize, or nil when none is due.")
 
+(defvar-local herdr-term--connection nil
+  "Remote server connection for this pane, or nil for the local server.")
+
 ;;; Keymaps
 
 ;; The shifted page keys are what a terminal emulator conventionally uses
@@ -265,17 +268,18 @@ to evil, as the way back out of a terminal that has the keyboard.")
 ;;; Commands
 
 ;;;###autoload
-(defun herdr-term-open (pane &optional writable)
+(defun herdr-term-open (pane &optional writable connection)
   "Open a buffer mirroring herdr PANE.
 With a prefix argument WRITABLE, attach the `control' stream so that
 keystrokes reach the pane; otherwise attach `observe', which is read
-only.  Re-opening a pane that is already streaming only displays its
+only.  CONNECTION selects a remote server when non-nil.
+Re-opening a pane that is already streaming only displays its
 buffer, because re-initializing would tear down a working terminal."
   (interactive
    (list (herdr-term-read-pane "Open pane: ") current-prefix-arg))
   (ghostel--load-module t)
-  (let* ((name (herdr-term--buffer-name pane))
-         (existing (herdr-term--buffer pane)))
+  (let* ((name (herdr-term--buffer-name pane connection))
+         (existing (herdr-term--buffer pane connection)))
     (when (and existing (not (equal (buffer-name existing) name)))
       (with-current-buffer existing
         (rename-buffer name t)))
@@ -284,11 +288,12 @@ buffer, because re-initializing would tear down a working terminal."
               (buffer-local-value 'herdr-term--process existing)))
         (pop-to-buffer existing)
       (herdr-term--setup (or existing (get-buffer-create name))
-                         pane writable))))
+                         pane writable connection))))
 
 ;;;###autoload
-(defun herdr-term-new (&optional cwd)
+(defun herdr-term-new (&optional cwd connection)
   "Create a herdr terminal in CWD and open it writable.
+CONNECTION selects a remote server when non-nil.
 This creates a herdr workspace whose root pane runs a shell, then
 attaches a `control' stream to that pane, which is how a terminal is
 driven from Emacs.  Interactively, a prefix argument prompts for CWD;
@@ -297,19 +302,24 @@ directory when the current buffer is remote."
   (interactive (list (when current-prefix-arg
                        (read-directory-name "New terminal cwd: "))))
   (let* ((directory
-          (expand-file-name
-           (or cwd (if (file-remote-p default-directory)
-                       "~"
-                     default-directory))))
-         (result (herdr-api-request "workspace.create"
-                                    (list :cwd directory)))
+          (and (or cwd (null connection))
+               (expand-file-name
+                (or cwd (if (file-remote-p default-directory)
+                            "~"
+                          default-directory)))))
+         (params (and directory (list :cwd directory)))
+         (result (if connection
+                     (let ((herdr-api-socket (plist-get connection :socket)))
+                       (herdr-api-request "workspace.create" params))
+                   (herdr-api-request "workspace.create" params)))
          (root (gethash "root_pane" result))
          (pane (and root (gethash "pane_id" root))))
     ;; The call itself succeeded; herdr just answered with a shape this
     ;; command cannot use, which is ours to report, not the API's.
     (unless pane
-      (user-error "Herdr created no pane for %s" directory))
-    (herdr-term-open pane t)))
+      (user-error "Herdr created no pane%s"
+                  (if directory (format " for %s" directory) "")))
+    (herdr-term-open pane t connection)))
 
 ;;;###autoload
 (defun herdr-term-split-right ()
@@ -362,7 +372,7 @@ that was already there."
            (list (lambda (buffer _alist)
                    (set-window-buffer window buffer)
                    window))))
-      (herdr-term-open pane t))
+      (herdr-term-open pane t herdr-term--connection))
     (select-window window)
     ;; Both windows are new sizes, and the hook that notices a resize
     ;; runs from redisplay, which a command rearranging windows does not
@@ -422,12 +432,12 @@ inside a herdr layout."
           (list (lambda (buffer _alist)
                   (set-window-buffer window buffer)
                   window))))
-    (herdr-term-open pane t))
+    (herdr-term-open pane t herdr-term--connection))
   ;; `herdr-term-open' shows a terminal that is already streaming as it
   ;; stands, so control has to be asked for again here.  A sibling first
   ;; opened from a panel observes, and would go on ignoring what is
   ;; typed at it however often it was walked to.
-  (when-let* ((buffer (herdr-term--buffer pane))
+  (when-let* ((buffer (herdr-term--buffer pane herdr-term--connection))
               ((not (buffer-local-value 'herdr-term--writable buffer))))
     (with-current-buffer buffer
       (herdr-term-take-control)))
@@ -554,29 +564,36 @@ as resync and close, as opposed to keys that are forwarded to the pane."
 
 ;;; Setup and Teardown
 
-(defun herdr-term--buffer (pane)
-  "Return the terminal buffer mirroring PANE, or nil."
+(defun herdr-term--buffer (pane &optional connection)
+  "Return the buffer mirroring PANE through CONNECTION, or nil."
   (seq-find (lambda (buffer)
               (and (buffer-live-p buffer)
                    (equal (buffer-local-value 'herdr-term--pane buffer)
-                          pane)))
+                          pane)
+                   (equal (plist-get
+                           (buffer-local-value 'herdr-term--connection buffer)
+                           :id)
+                          (plist-get connection :id))))
             (buffer-list)))
 
-(defun herdr-term--buffer-name (pane)
-  "Return the terminal buffer name for PANE.
+(defun herdr-term--buffer-name (pane &optional connection)
+  "Return the terminal buffer name for PANE through CONNECTION.
 Put the agent title first so buffer lists distinguish work at a
 glance, and retain PANE to keep equal titles unambiguous."
-  (if-let* ((agent (herdr-session-agent pane))
-            (title (herdr-session-agent-title agent)))
-      (format "*herdr:%s [%s]*" title pane)
-    (format "*herdr:%s*" pane)))
+  (let ((machine (plist-get connection :label)))
+    (if-let* ((agent (and (null connection) (herdr-session-agent pane)))
+              (title (herdr-session-agent-title agent)))
+        (format "*herdr:%s [%s]*" title pane)
+      (format "*herdr:%s%s*" (if machine (concat machine ":") "") pane))))
 
 (defun herdr-term--rename-buffers ()
   "Update terminal buffer names from the current session titles."
   (dolist (buffer (buffer-list))
     (when-let* ((pane (and (buffer-live-p buffer)
                            (buffer-local-value 'herdr-term--pane buffer))))
-      (let ((name (herdr-term--buffer-name pane)))
+      (let* ((connection
+              (buffer-local-value 'herdr-term--connection buffer))
+             (name (herdr-term--buffer-name pane connection)))
         (unless (equal (buffer-name buffer) name)
           (with-current-buffer buffer
             (rename-buffer name t)))))))
@@ -598,14 +615,16 @@ glance, and retain PANE to keep equal titles unambiguous."
   (dolist (buffer (buffer-list))
     (when-let* ((pane-id
                  (and (buffer-live-p buffer)
-                      (buffer-local-value 'herdr-term--pane buffer))))
+                      (buffer-local-value 'herdr-term--pane buffer)))
+               ((null (buffer-local-value 'herdr-term--connection buffer))))
       (herdr-term--update-directory buffer pane-id))))
 
 (add-hook 'herdr-session-change-hook #'herdr-term--update-directories)
 
-(defun herdr-term--setup (buffer pane writable)
+(defun herdr-term--setup (buffer pane writable &optional connection)
   "Display BUFFER, attach it to herdr PANE and start its stream.
-WRITABLE selects the `control' stream over `observe'.  The grid is
+WRITABLE selects the `control' stream over `observe'.
+CONNECTION selects a remote server when non-nil.  The grid is
 first sized to the buffer's window so that the connect asks for
 sensible dimensions; the first full frame then re-initializes it to
 herdr's authoritative ones."
@@ -626,10 +645,14 @@ herdr's authoritative ones."
     (with-current-buffer buffer
       (setq herdr-term--pane pane
             herdr-term--writable writable
+            herdr-term--connection connection
             herdr-term--last-seq nil
             herdr-term--last-reconnect nil
             herdr-term--fail-count 0)
-      (herdr-term--update-directory buffer pane)
+      (when connection
+        (setq-local herdr-api-socket (plist-get connection :socket)))
+      (unless connection
+        (herdr-term--update-directory buffer pane))
       (herdr-term--reset-term rows cols)
       (herdr-term-command-mode 1)
       (add-hook 'window-size-change-functions #'herdr-term--note-resize nil t)
@@ -670,6 +693,10 @@ frame, so this doubles as the only resync the protocol offers."
                     ;; frames at all.  We are the legitimate owner
                     ;; reconnecting to our own session, so always take over.
                     (and herdr-term--writable '("--takeover"))))
+           (command (append (or (plist-get herdr-term--connection
+                                            :stream-command)
+                                (list herdr-term-executable))
+                            arguments))
            (process (make-process
                      :name (format "herdr-term:%s" herdr-term--pane)
                      ;; Deliberately process-less: `process-send-string'
@@ -679,7 +706,7 @@ frame, so this doubles as the only resync the protocol offers."
                      ;; process as the buffer's would let a stray keypress
                      ;; write raw bytes into a stream that speaks JSON.
                      :buffer nil
-                     :command (cons herdr-term-executable arguments)
+                     :command command
                      :connection-type 'pipe
                      :coding 'binary
                      :noquery t

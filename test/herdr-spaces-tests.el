@@ -56,6 +56,103 @@ and none of what it answers is what these tests are about."
   `(let ((herdr-spaces-git nil))
      (herdr-session-with-snapshot ,snapshot ,@body)))
 
+(ert-deftest herdr-spaces-refresh:nests-local-spaces-under-a-machine ()
+  "The local machine is the parent of its spaces."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "project" "idle"))
+            :panes (vector (herdr-spaces-tests--pane "w1:p1" "w1")))
+    (cl-letf (((symbol-function 'herdr-machines-refresh) #'ignore))
+      (with-temp-buffer
+        (let ((herdr-spaces-buffer-name (buffer-name)))
+          (herdr-spaces-refresh)
+          (should (< (progn (goto-char (point-min)) (search-forward "Local"))
+                     (progn (goto-char (point-min))
+                            (search-forward "project")))))))))
+
+(ert-deftest herdr-spaces--scoped-id:separates-remote-rows ()
+  "Equal remote row identifiers remain distinct across machines."
+  (let ((herdr-spaces--machine-id "baker")
+        (herdr-spaces--local-machine-p nil))
+    (should (equal (herdr-spaces--scoped-id "w1:p1") "baker:w1:p1"))))
+
+(ert-deftest herdr-spaces--pane-entry:keeps-a-colliding-remote-pane-closed ()
+  "A remote pane cannot inherit the state of an open local pane."
+  (let ((herdr-spaces--machine-id "baker")
+        (herdr-spaces--local-machine-p nil)
+        (pane (make-hash-table :test #'equal)))
+    (puthash "pane_id" "w1:p1" pane)
+    (should (eq (plist-get (herdr-spaces--pane-entry pane nil) :emphasis)
+                'closed))))
+
+(ert-deftest herdr-spaces--pane-entry:highlights-the-selected-remote-pane ()
+  (let ((herdr-spaces--machine-id "baker")
+        (herdr-spaces--local-machine-p nil)
+        (pane (make-hash-table :test #'equal)))
+    (puthash "pane_id" "w1:p1" pane)
+    (should (eq (plist-get (herdr-spaces--pane-entry pane "w1:p1") :emphasis)
+                'current))))
+
+(ert-deftest herdr-spaces--read-only-p:ignores-a-colliding-remote-workspace ()
+  "A remote workspace cannot inherit a local read-only marker."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "project" "idle"))
+            :panes (vector (herdr-spaces-tests--pane "w1:p1" "w1")))
+    (let ((herdr-spaces--local-machine-p nil))
+      (cl-letf (((symbol-function 'herdr-panel-pane-open-p)
+                 (lambda (_pane) t))
+                ((symbol-function 'herdr-panel-pane-writable-p)
+                 (lambda (_pane) nil)))
+        (should-not (herdr-spaces--read-only-p "w1"))))))
+
+(ert-deftest herdr-spaces-mode:changing-modes-stops-machine-polling ()
+  "Leaving the spaces mode cancels its repeating machine timer."
+  (let ((timer (run-at-time 60 60 #'ignore)))
+    (unwind-protect
+        (with-temp-buffer
+          (cl-letf (((symbol-function 'run-at-time)
+                     (lambda (&rest _arguments) timer))
+                    ((symbol-function 'herdr-machines-refresh) #'ignore))
+            (herdr-spaces-mode))
+          (fundamental-mode)
+          (should-not (memq timer timer-list))
+          (should-not (memq #'herdr-spaces--refresh-existing
+                            herdr-machines-change-hook)))
+      (when (timerp timer)
+        (cancel-timer timer)))))
+
+(ert-deftest herdr-spaces--pane-at-point:returns-a-remote-target ()
+  (with-temp-buffer
+    (let ((machine '(:id "baker" :label "baker" :status online
+                     :snapshot nil)))
+      (magit-insert-section (herdr-spaces-tests-root)
+        (magit-insert-section (herdr-machine "baker")
+          (magit-insert-section (herdr-pane "w1:p1")
+            (insert "remote pane\n"))))
+      (goto-char (point-min))
+      (search-forward "remote pane")
+      (cl-letf (((symbol-function 'herdr-machines-list)
+                 (lambda () (list machine))))
+        (let ((target (herdr-spaces--pane-at-point)))
+          (should (eq (plist-get target :machine) machine))
+          (should (equal (plist-get target :pane) "w1:p1")))))))
+
+(ert-deftest herdr-spaces--git:skips-a-remote-directory ()
+  "A remote workspace never receives local repository details."
+  (let ((herdr-spaces--local-machine-p nil))
+    (cl-letf (((symbol-function 'file-directory-p)
+               (lambda (_directory)
+                 (ert-fail "asked the local filesystem"))))
+      (should-not (herdr-spaces--git "/shared/path")))))
+
+(ert-deftest herdr-spaces--refresh-existing:does-not-recreate-a-closed-panel ()
+  "A late machine result leaves a closed spaces panel closed."
+  (let ((herdr-spaces-buffer-name " *closed-herdr-spaces-test*"))
+    (should-not (get-buffer herdr-spaces-buffer-name))
+    (herdr-spaces--refresh-existing)
+    (should-not (get-buffer herdr-spaces-buffer-name))))
+
 (defun herdr-spaces-tests--fill-at (text)
   "Return the faces on the first character of TEXT, as a list.
 Point is left where the search ended.  Rows are found by what they
@@ -345,8 +442,9 @@ Kept, it would name the active tab's pane twice in the same column."
   "A pane row leads to its own pane, not to its workspace's."
   (with-temp-buffer
     (magit-insert-section (herdr-spaces-tests-root)
-      (magit-insert-section (herdr-pane "w1:p2")
-        (insert "a pane row\n")))
+      (magit-insert-section (herdr-machine "local")
+        (magit-insert-section (herdr-pane "w1:p2")
+          (insert "a pane row\n"))))
     (goto-char (point-max))
     (forward-line -1)
     (should (equal (herdr-spaces--pane-at-point) "w1:p2"))))

@@ -31,9 +31,9 @@
 ;; ordinary display of a file or a help buffer cannot land in one of them
 ;; and `delete-other-windows' in the terminal leaves the layout standing.
 
-;; What the column holds is `herdr-ui-panels': spaces, then agents, then
-;; reviews.  Reviews is optional, because `herdr-review' needs a tool herdr
-;; does not, so its entry is skipped until that file is loaded.
+;; What the column holds is `herdr-ui-panels': machines, spaces, agents,
+;; then reviews.  Reviews is optional, because `herdr-review' needs a tool
+;; herdr does not, so its entry is skipped until that file is loaded.
 
 ;; The tabs of the terminal's workspace ride on its tab line rather than
 ;; in a window of their own.  A window would cost a mode line and a border
@@ -55,11 +55,14 @@
 
 (require 'herdr-agents)
 (require 'herdr-api)
+(require 'herdr-machines)
 (require 'herdr-panel)
 (require 'herdr-session)
 (require 'herdr-spaces)
 
-(declare-function herdr-term-open "herdr-term" (pane &optional writable))
+(declare-function herdr-term-open "herdr-term"
+                  (pane &optional writable connection))
+(defvar herdr-term--connection)
 (declare-function herdr-term-fit-to-window "herdr-term" ())
 (defvar herdr-term--pane)
 (defvar herdr-term-command-mode-map)
@@ -100,10 +103,9 @@ Each entry is (FUNCTION . WEIGHT).  FUNCTION takes no arguments and
 returns the panel's buffer, drawn and tracking the session; WEIGHT is
 that panel's share of the column, counted against the weights of the
 other panels rather than as a fraction, so that leaving one out leaves
-the rest in proportion.  Spaces outweighs agents because it lists every
-workspace, while agents lists only the panes herdr found one running
-in, and reviews is smaller again because it holds a row per workspace
-under review and usually none.
+the rest in proportion.  Reviews needs the least room.  Spaces outweighs
+agents because it lists every machine and workspace.  Agents lists
+only the panes Herdr found one running in.
 
 An entry whose function is undefined is skipped rather than an error,
 which is how an optional panel keeps its place in the order without
@@ -156,14 +158,18 @@ Set this to nil to leave their settings untouched."
 ;;; Layout
 
 ;;;###autoload
-(defun herdr-ui (&optional pane)
+(defun herdr-ui (&optional pane connection)
   "Lay out the herdr panels around the terminal for PANE.
 Spaces sit above agents in a column on the left, and the terminal
 fills the rest.  With no PANE, the pane the session reports as focused
-is used, or the terminal already on screen.  Called interactively with
-a prefix argument, PANE is read with completion."
+is used, or the terminal already on screen.  CONNECTION selects a
+remote server when non-nil.  Called interactively with a prefix
+argument, PANE is read with completion."
   (interactive (list (when current-prefix-arg
                        (herdr-ui--read-pane))))
+  (when (and pane (listp pane))
+    (setq connection (herdr-machines-connection (plist-get pane :machine))
+          pane (plist-get pane :pane)))
   (unless (herdr-session-live-p)
     (herdr-session-start))
   (when herdr-ui-tame-window-packages
@@ -181,12 +187,17 @@ a prefix argument, PANE is read with completion."
     ;; around and one that ignored what was typed at it would be a
     ;; puzzle rather than a terminal.  A panel visiting a row still
     ;; observes; only one client at a time may hold a pane.
-    (herdr-panel-open-pane pane 'control)
+    (if connection
+        (let ((display-buffer-overriding-action
+               '((herdr-panel--display-in-main))))
+          (herdr-term-open pane t connection))
+      (herdr-panel-open-pane pane 'control))
     (herdr-ui--mark-main-window)
     (herdr-ui--show-panels)
-    (when-let* ((buffer (herdr-ui--terminal-buffer pane)))
-      (with-current-buffer buffer
-        (herdr-ui-tab-line-mode 1))
+    (when-let* ((buffer (herdr-ui--terminal-buffer pane connection)))
+      (unless connection
+        (with-current-buffer buffer
+          (herdr-ui-tab-line-mode 1)))
       (when-let* ((window (get-buffer-window buffer)))
         (select-window window)))))
 
@@ -279,10 +290,14 @@ HEIGHT is its share of the frame."
       . ((no-delete-other-windows . t)
          (no-other-window . ,(eq herdr-ui-panel-other-window 'skip)))))))
 
-(defun herdr-ui--terminal-buffer (pane)
-  "Return the buffer mirroring PANE, or nil when there is none."
+(defun herdr-ui--terminal-buffer (pane &optional connection)
+  "Return the buffer mirroring PANE through CONNECTION, or nil."
   (seq-find (lambda (buffer)
-              (equal (buffer-local-value 'herdr-term--pane buffer) pane))
+              (and (equal (buffer-local-value 'herdr-term--pane buffer) pane)
+                   (equal (plist-get
+                           (buffer-local-value 'herdr-term--connection buffer)
+                           :id)
+                          (plist-get connection :id))))
             (buffer-list)))
 
 (defun herdr-ui--focused-pane ()
@@ -339,8 +354,15 @@ no once the herdr buffers are gone."
 Each tab of the pane's workspace appears, the pane's own marked, and
 clicking one shows a terminal for it."
   (when-let* ((pane-id (bound-and-true-p herdr-term--pane))
-              (pane (herdr-session-pane pane-id))
-              (tabs (herdr-session-tabs (gethash "workspace_id" pane))))
+              (pane (herdr-ui--pane-node pane-id))
+              (tabs (if (bound-and-true-p herdr-term--connection)
+                        (gethash "tabs"
+                                 (herdr-api-request
+                                  "tab.list"
+                                  (list :workspace_id
+                                        (gethash "workspace_id" pane))))
+                      (herdr-session-tabs
+                       (gethash "workspace_id" pane)))))
     (mapconcat (lambda (tab) (herdr-ui--tab-string tab pane))
                tabs " ")))
 
@@ -373,7 +395,9 @@ clicking one shows a terminal for it."
   (let ((pane (herdr-ui--tab-pane tab-id)))
     (unless pane
       (user-error "Tab %s has no pane" tab-id))
-    (herdr-panel-open-pane pane)))
+    (if (bound-and-true-p herdr-term--connection)
+        (herdr-term-open pane nil herdr-term--connection)
+      (herdr-panel-open-pane pane))))
 
 (defun herdr-ui--tab-pane (tab)
   "Return the first pane of TAB, or nil.
@@ -382,8 +406,9 @@ not, for the reason `herdr-ui--pane-node' gives.  Stepping onto a tab
 made a keystroke ago reaches this before any event has refreshed the
 tree, and reading the tree alone refused to open the tab it had just
 been asked for."
-  (or (gethash "pane_id" (or (car (herdr-session-panes tab))
-                             (make-hash-table :size 1)))
+  (or (and (not (bound-and-true-p herdr-term--connection))
+           (gethash "pane_id" (or (car (herdr-session-panes tab))
+                                  (make-hash-table :size 1))))
       (car (herdr-ui--panes tab))))
 
 (defun herdr-ui--panes (tab)
@@ -412,16 +437,53 @@ been asked for."
 With a prefix argument OTHER, open it the other way round from
 `herdr-panel-visit-access', as the panels' own visit commands do."
   (interactive (list (herdr-ui--read-pane) current-prefix-arg))
-  (herdr-panel-open-pane pane (herdr-panel-access other)))
+  (if (listp pane)
+      (let* ((machine (plist-get pane :machine))
+             (connection (herdr-machines-connection machine)))
+        (if connection
+            (herdr-term-open (plist-get pane :pane)
+                             (eq (herdr-panel-access other) 'control)
+                             connection)
+          (herdr-panel-open-pane (plist-get pane :pane)
+                                 (herdr-panel-access other))))
+    (herdr-panel-open-pane pane (herdr-panel-access other))))
 
 (defun herdr-ui--read-pane ()
   "Read a pane of the session with completion and return it.
 Rows run in the order herdr reports the panes, which keeps the panes
 of one workspace together."
-  (herdr-panel-read-nodes "Terminal: "
-                          #'herdr-session-panes
-                          #'herdr-ui--pane-entry
-                          "Herdr reports no pane to visit"))
+  (herdr-panel-ensure-session)
+  (let ((machines (herdr-machines-refresh-online))
+        rows)
+    (when (and herdr-session--snapshot
+               (not (seq-find (lambda (machine)
+                                (equal (plist-get machine :id) "local"))
+                              machines)))
+      (push (list :id "local" :label "Local" :status 'online
+                  :snapshot herdr-session--snapshot)
+            machines))
+    (dolist (machine machines)
+      (let ((herdr-session--snapshot (plist-get machine :snapshot)))
+        (dolist (pane (herdr-session-panes))
+          (let* ((entry (herdr-ui--pane-entry pane nil))
+                 (label (plist-get machine :label))
+                 (host (if (> (seq-count
+                               (lambda (item)
+                                 (equal (plist-get item :label) label))
+                               machines)
+                              1)
+                           (format "%s (%s)" label
+                                   (plist-get machine :id))
+                         label)))
+            (setq entry (plist-put entry :host
+                                   host))
+            (push (cons (herdr-panel-entry-line entry)
+                        (list :machine machine
+                              :pane (gethash "pane_id" pane)))
+                  rows)))))
+    (unless rows
+      (user-error "Herdr reports no pane to visit"))
+    (herdr-panel-read-pane "Terminal: " (nreverse rows))))
 
 (defun herdr-ui--pane-entry (pane current)
   "Return the row for PANE, emphasised against the CURRENT one.
@@ -493,7 +555,8 @@ does not.  The tree is refreshed from an event a moment after the
 change that raised it, so a pane made a keystroke ago is not in it yet,
 and a command that read the tree alone would refuse to act on the very
 pane it was just given."
-  (or (herdr-session-pane pane)
+  (or (and (not (bound-and-true-p herdr-term--connection))
+           (herdr-session-pane pane))
       (gethash "pane" (herdr-api-request "pane.get" (list :pane_id pane)))))
 
 (defun herdr-ui--this-node ()
@@ -529,7 +592,9 @@ it.  The new pane runs a shell in the workspace's own directory."
     ;; command cannot use, which is ours to report, not the API's.
     (unless pane
       (user-error "Herdr created a tab but named no pane in it"))
-    (herdr-panel-open-pane pane 'control)))
+    (if (bound-and-true-p herdr-term--connection)
+        (herdr-term-open pane t herdr-term--connection)
+      (herdr-panel-open-pane pane 'control))))
 
 ;;;###autoload
 (defun herdr-ui-tab-close ()
@@ -543,7 +608,9 @@ workspace along with its last tab."
     ;; The panes are read before the tab goes, because afterwards herdr
     ;; reports none for it and there would be no way left to say which
     ;; buffers mirrored it.
-    (let ((panes (herdr-ui--panes tab)))
+    (let ((panes (herdr-ui--panes tab))
+          (connection-id (plist-get (bound-and-true-p herdr-term--connection)
+                                    :id)))
       (herdr-api-request "tab.close" (list :tab_id tab))
       ;; A stream whose pane has gone takes its buffer down on its own,
       ;; under `herdr-term-pane-gone-action'.  Doing it here as well is
@@ -555,7 +622,11 @@ workspace along with its last tab."
         ;; test or a stray `setq' that left it non-nil would otherwise
         ;; match every buffer in the session.
         (when (and (local-variable-p 'herdr-term--pane buffer)
-                   (member (herdr-panel--buffer-pane buffer) panes))
+                   (member (herdr-panel--buffer-pane buffer) panes)
+                   (equal (plist-get
+                           (buffer-local-value 'herdr-term--connection buffer)
+                           :id)
+                          connection-id))
           (kill-buffer buffer))))))
 
 ;;;###autoload

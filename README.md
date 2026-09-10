@@ -227,9 +227,9 @@ as herdr's per-agent table does, and ships `droid` off for the same reason.
 
 `herdr-ui-panels` is an alist of `(FUNCTION . WEIGHT)`, top to bottom. The
 weights are shares counted against each other rather than fractions, so
-dropping a panel leaves the rest in proportion. Spaces outweighs agents
-because it lists every workspace while agents lists only the panes herdr
-found one running in.
+dropping a panel leaves the rest in proportion. Spaces lists each machine
+as the parent of its workspaces. It outweighs agents because agents lists
+only the panes herdr found one running in.
 
 An entry whose function is undefined is skipped rather than signalled, which
 is how the optional Reviews panel keeps its place in the order without
