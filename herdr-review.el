@@ -55,6 +55,8 @@
 (require 'herdr-panel)
 (require 'herdr-session)
 
+(declare-function herdr-ui-main-window "herdr-ui" (&optional frame))
+
 ;;; Options
 
 (defgroup herdr-review nil
@@ -110,6 +112,11 @@ rule they read as one list under several headings."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-review
   :type 'string)
+
+;;; Variables
+
+(defvar herdr-review--known-panes nil
+  "Pane identifiers for the reviews seen at the last session change.")
 
 ;;; Faces
 
@@ -319,6 +326,25 @@ the same as one nobody asked for."
       (let ((reply (ignore-errors (json-parse-buffer))))
         (and (hash-table-p reply) (gethash "pane_id" reply))))))
 
+(defun herdr-review--open-new-review ()
+  "Open a newly reported review in the main herdr window."
+  (let* ((panes (herdr-review--panes))
+         (new-pane (seq-find (lambda (pane)
+                               (not (member pane
+                                            herdr-review--known-panes)))
+                             panes)))
+    (setq herdr-review--known-panes panes)
+    (when-let* ((new-pane)
+                ((fboundp 'herdr-ui-main-window))
+                (window (herdr-ui-main-window)))
+      (with-selected-window window
+        (herdr-panel-open-pane new-pane 'control)))))
+
+(defun herdr-review--panes ()
+  "Return the pane identifiers of the reviews in panel order."
+  (mapcar (lambda (review) (gethash "pane_id" review))
+          (herdr-review-list)))
+
 ;;; Fitting Into herdr
 
 ;; The panel's place in the column is already held for it, in the default
@@ -328,6 +354,8 @@ the same as one nobody asked for."
 ;; is what makes requiring this file the whole of the setup.
 
 (add-to-list 'herdr-agents-hidden-kinds herdr-review-agent)
+(setq herdr-review--known-panes (herdr-review--panes))
+(add-hook 'herdr-session-change-hook #'herdr-review--open-new-review 10)
 
 ;;; _
 (provide 'herdr-review)

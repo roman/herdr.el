@@ -182,6 +182,7 @@ a prefix argument, PANE is read with completion."
     ;; puzzle rather than a terminal.  A panel visiting a row still
     ;; observes; only one client at a time may hold a pane.
     (herdr-panel-open-pane pane 'control)
+    (herdr-ui--mark-main-window)
     (herdr-ui--show-panels)
     (when-let* ((buffer (herdr-ui--terminal-buffer pane)))
       (with-current-buffer buffer
@@ -225,6 +226,18 @@ fraction of the width it was just given."
                    (buffer-local-value 'herdr-panel-refresh-function
                                        (window-buffer window))))
             (window-list frame)))
+
+(defun herdr-ui-main-window (&optional frame)
+  "Return the main herdr window on FRAME, or nil when there is none."
+  (seq-find (lambda (window)
+              (window-parameter window 'herdr-ui-main))
+            (window-list frame)))
+
+(defun herdr-ui--mark-main-window ()
+  "Mark the selected window as the main window of the herdr layout."
+  (dolist (window (window-list))
+    (set-window-parameter window 'herdr-ui-main nil))
+  (set-window-parameter (selected-window) 'herdr-ui-main t))
 
 (defun herdr-ui--show-panels ()
   "Put the panels of `herdr-ui-panels' in their column, in order.
@@ -289,6 +302,8 @@ pane is work in progress, not furniture."
   (dolist (buffer (buffer-list))
     (when (buffer-local-value 'herdr-panel-refresh-function buffer)
       (kill-buffer buffer)))
+  (when-let* ((window (herdr-ui-main-window)))
+    (set-window-parameter window 'herdr-ui-main nil))
   (herdr-session-stop))
 
 ;;; Living With Other Window Packages

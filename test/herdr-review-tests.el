@@ -159,6 +159,58 @@ asked for."
   (let ((herdr-review-program "false"))
     (should-error (herdr-review--run "open") :type 'user-error)))
 
+;;; Opening A New Review
+
+(ert-deftest herdr-review--open-new-review:opens-each-review-once ()
+  "A newly reported review replaces the terminal in the main window once."
+  (let ((herdr-review--known-panes nil)
+        (review (herdr-review-tests--record '(:pane_id "w1:p2")))
+        opened)
+    (cl-letf (((symbol-function 'herdr-review-list)
+               (lambda () (list review)))
+              ((symbol-function 'herdr-ui-main-window)
+               (lambda () (selected-window)))
+              ((symbol-function 'herdr-panel-open-pane)
+               (lambda (pane access) (push (list pane access) opened))))
+      (herdr-review--open-new-review)
+      (herdr-review--open-new-review)
+      (should (equal opened '(("w1:p2" control)))))))
+
+(ert-deftest herdr-review--open-new-review:leaves-other-layouts-alone ()
+  "A standalone herdr terminal does not stand for the full layout."
+  (let ((buffer (generate-new-buffer " *herdr-review-terminal*"))
+        (herdr-review--known-panes nil)
+        (review (herdr-review-tests--record '(:pane_id "w1:p2")))
+        opened)
+    (unwind-protect
+        (save-window-excursion
+          (with-current-buffer buffer
+            (setq-local herdr-term--pane "w1:p1")
+            (set-window-buffer (selected-window) (current-buffer)))
+          (cl-letf (((symbol-function 'herdr-review-list)
+                     (lambda () (list review)))
+                    ((symbol-function 'herdr-panel-open-pane)
+                     (lambda (&rest _) (setq opened t))))
+            (herdr-review--open-new-review)
+            (should-not opened)))
+      (kill-buffer buffer))))
+
+(ert-deftest herdr-review--open-new-review:opens-the-waiting-first-review ()
+  "The first review in panel order wins when several arrive together."
+  (let ((herdr-review--known-panes nil)
+        (reviews (mapcar (lambda (pane)
+                           (herdr-review-tests--record
+                            (list :pane_id pane)))
+                         '("w2:p2" "w1:p2")))
+        opened)
+    (cl-letf (((symbol-function 'herdr-review-list) (lambda () reviews))
+              ((symbol-function 'herdr-ui-main-window)
+               (lambda () (selected-window)))
+              ((symbol-function 'herdr-panel-open-pane)
+               (lambda (pane _access) (setq opened pane))))
+      (herdr-review--open-new-review)
+      (should (equal opened "w2:p2")))))
+
 ;;; Fitting Into herdr
 
 (ert-deftest herdr-review:takes-reviews-out-of-the-agents-panel ()

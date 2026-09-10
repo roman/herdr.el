@@ -187,6 +187,10 @@ In the panel, `+` starts a review of the workspace at point and `-` ends it.
 A workspace holds one review at a time; asking for a second goes to the
 first. Point that at your own tool by setting `herdr-review-program`.
 
+When a new review appears while the herdr layout is visible, its terminal
+replaces the terminal in the main window and takes control. Later session
+updates leave the window alone, so moving back to another terminal sticks.
+
 ### (2) Sounds are opt in, and follow herdr's decisions
 
 `herdr-sound-mode` rings when an agent starts waiting for you, and rings

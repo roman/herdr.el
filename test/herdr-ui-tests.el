@@ -167,6 +167,20 @@ skipped window like any other, so the move itself is what to assert."
         (other-window 1)
         (should (eq (selected-window) panel))))))
 
+;;; Naming The Main Window
+
+(ert-deftest herdr-ui--mark-main-window:names-only-the-selected-window ()
+  "The layout records the terminal window it placed beside the panels."
+  (let ((first (selected-window)))
+    (unwind-protect
+        (save-window-excursion
+          (let ((second (split-window-right)))
+            (set-window-parameter second 'herdr-ui-main t)
+            (herdr-ui--mark-main-window)
+            (should (eq (herdr-ui-main-window) first))
+            (should-not (window-parameter second 'herdr-ui-main))))
+      (set-window-parameter first 'herdr-ui-main nil))))
+
 ;;; Quitting
 
 (ert-deftest herdr-ui-quit:kills-panels-and-spares-terminals ()
