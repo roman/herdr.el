@@ -40,10 +40,9 @@
 ;; and still need a snapshot for the other half.  A snapshot is one short
 ;; connection, and bursts are coalesced by `herdr-session-refresh-delay'.
 
-;; Refreshing is always deferred through a timer, never run from the event
-;; callback.  A callback runs inside a process filter, where quitting is
-;; inhibited, so a blocking request issued there would freeze Emacs for the
-;; whole timeout with no way to interrupt it.
+;; Automatic refreshing uses an asynchronous request.  A silent server
+;; therefore cannot hold the Emacs event loop, and repeated timer callbacks
+;; share one request until it finishes.
 
 ;;; Code:
 
@@ -144,6 +143,15 @@ API.")
 (defvar herdr-session--poll-timer nil
   "Repeating timer taking the snapshots no event asks for.")
 
+(defvar herdr-session--refresh-process nil
+  "Process carrying the current automatic refresh, or nil.")
+
+(defvar herdr-session--refresh-pending nil
+  "Whether another refresh became due during the current request.")
+
+(defvar herdr-session--refresh-generation 0
+  "Generation used to invalidate automatic refresh callbacks.")
+
 (defvar herdr-session--closed-reason nil
   "Why the event subscription ended, or nil while it is healthy.")
 
@@ -183,6 +191,7 @@ after the server was restarted."
       (cancel-timer timer)))
   (setq herdr-session--timer nil
         herdr-session--poll-timer nil)
+  (herdr-session--cancel-refresh)
   (herdr-api-unsubscribe herdr-session--subscription)
   (setq herdr-session--subscription nil))
 
@@ -200,12 +209,24 @@ no one sees.
 This blocks, so it must not run from a process filter; see
 `herdr-session--note-event'."
   (interactive "p")
-  (setq herdr-session--snapshot
+  (herdr-session--cancel-refresh)
+  (let (snapshot)
+    (unwind-protect
         (let ((herdr-api-socket (default-value 'herdr-api-socket)))
-          (gethash "snapshot" (herdr-api-request "session.snapshot"))))
+          (setq snapshot
+                (gethash "snapshot"
+                         (herdr-api-request "session.snapshot"))))
+      (herdr-session--cancel-refresh))
+    (herdr-session--install-snapshot snapshot (and force 'force))))
+
+(defun herdr-session--install-snapshot (snapshot announcement-mode)
+  "Install SNAPSHOT and announce its change.
+ANNOUNCEMENT-MODE is `force' when consumers must redraw."
+  (setq herdr-session--snapshot snapshot)
   (herdr-session--note-finishes)
   (let ((fingerprint (herdr-session--fingerprint)))
-    (when (or force (not (equal fingerprint herdr-session--fingerprint)))
+    (when (or (eq announcement-mode 'force)
+              (not (equal fingerprint herdr-session--fingerprint)))
       (setq herdr-session--fingerprint fingerprint)
       (run-hooks 'herdr-session-change-hook)))
   herdr-session--snapshot)
@@ -258,11 +279,55 @@ until it timed out."
   (herdr-session--refresh-quietly))
 
 (defun herdr-session--refresh-quietly ()
-  "Refresh, keeping a failure from stopping the timer that asked.
-A server that went away must not leave a repeating timer signalling
-once an interval for as long as Emacs runs."
-  (with-demoted-errors "herdr-session refresh: %S"
-    (herdr-session-refresh)))
+  "Request one automatic refresh without blocking Emacs.
+Keep one request in flight, so a silent server cannot make timer
+callbacks consume the event loop."
+  (if herdr-session--refresh-process
+      (setq herdr-session--refresh-pending t)
+    (setq herdr-session--refresh-pending nil)
+    (with-demoted-errors "herdr-session refresh: %S"
+      (let ((herdr-api-socket (default-value 'herdr-api-socket)))
+        (setq herdr-session--refresh-process
+              (herdr-api-request-async
+               "session.snapshot" nil
+               #'herdr-session--receive-refresh
+               #'herdr-session--refresh-failed))))))
+
+(defun herdr-session--receive-refresh (result process)
+  "Install RESULT when PROCESS is the current automatic refresh."
+  (when (eq process herdr-session--refresh-process)
+    (let ((refresh-pending herdr-session--refresh-pending)
+          (generation herdr-session--refresh-generation))
+      (setq herdr-session--refresh-process nil
+            herdr-session--refresh-pending nil)
+      (unwind-protect
+          (herdr-session--install-snapshot
+           (gethash "snapshot" result) nil)
+        (when (and refresh-pending
+                   (= generation herdr-session--refresh-generation)
+                   (null herdr-session--refresh-process))
+          (herdr-session--refresh-quietly))))))
+
+(defun herdr-session--refresh-failed (condition process)
+  "Report CONDITION when PROCESS is the current automatic refresh."
+  (when (eq process herdr-session--refresh-process)
+    (let ((refresh-pending herdr-session--refresh-pending)
+          (generation herdr-session--refresh-generation))
+      (setq herdr-session--refresh-process nil
+            herdr-session--refresh-pending nil)
+      (unwind-protect
+          (message "herdr-session refresh: %S" condition)
+        (when (and refresh-pending
+                   (= generation herdr-session--refresh-generation))
+          (herdr-session--refresh-quietly))))))
+
+(defun herdr-session--cancel-refresh ()
+  "Cancel the current automatic refresh and clear pending work."
+  (herdr-api-cancel-request herdr-session--refresh-process)
+  (setq herdr-session--refresh-process nil
+        herdr-session--refresh-pending nil
+        herdr-session--refresh-generation
+        (1+ herdr-session--refresh-generation)))
 
 (defun herdr-session--note-closed (reason)
   "Record REASON for the subscription ending and tell the panels."

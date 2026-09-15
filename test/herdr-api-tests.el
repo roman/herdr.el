@@ -45,8 +45,11 @@ A test drops one of these to play a server going away.")
 
 (defvar herdr-api-test-reply #'ignore
   "Function returning the reply line for a decoded request.
-It is called with the request hash-table.  Returning nil answers
-nothing, which is how a hung or silent server is played.")
+It is called with the request hash-table.  Return
+`herdr-api-test-hold' to keep the connection open without answering.")
+
+(defconst herdr-api-test-hold 'herdr-api-test-hold
+  "Reply value that keeps a test connection open without answering.")
 
 (defun herdr-api-test--send (connection string)
   "Write STRING to CONNECTION, tolerating a client that already left.
@@ -68,13 +71,15 @@ whole batch run down with it."
                 '(:id "" :error (:code "invalid_request"
                                  :message "missing field `params'")))
                "\n"))
-      (delete-process connection))
+     (delete-process connection))
      (t
-      (when-let* ((reply (funcall herdr-api-test-reply request)))
-        (herdr-api-test--send connection reply))
-      ;; Every method but `events.subscribe' spends its connection.
-      (unless (equal (gethash "method" request) "events.subscribe")
-        (delete-process connection))))))
+      (let ((reply (funcall herdr-api-test-reply request)))
+        (unless (eq reply herdr-api-test-hold)
+          (when reply
+            (herdr-api-test--send connection reply))
+          ;; Every method but `events.subscribe' spends its connection.
+          (unless (equal (gethash "method" request) "events.subscribe")
+            (delete-process connection))))))))
 
 (defmacro herdr-api-with-test-server (reply &rest body)
   "Evaluate BODY against a stand-in herdr server answering with REPLY.
@@ -238,6 +243,184 @@ default."
     (should (gethash "type" (herdr-api-request "ping")))
     (should (gethash "type" (herdr-api-request "ping")))
     (should (eql (length herdr-api-test-requests) 3))))
+
+(ert-deftest herdr-api-request-async:returns-before-a-timeout ()
+  "A silent server must not block the Emacs event loop."
+  (herdr-api-with-test-server
+      (lambda (_request) herdr-api-test-hold)
+    (let ((herdr-api-timeout 1)
+          (failure nil)
+          process)
+      (setq process
+            (with-timeout (0.5 (ert-fail "The request blocked Emacs"))
+              (herdr-api-request-async
+               "session.snapshot" nil #'ignore
+               (lambda (condition _process)
+                 (setq failure condition)))))
+      (unwind-protect
+          (progn
+            (dotimes (_ 100)
+              (unless failure
+                (accept-process-output nil 0.02)))
+            (should (eq (car failure) 'herdr-api-unavailable))
+            (should-not (process-live-p process)))
+        (when (process-live-p process)
+          (delete-process process))))))
+
+(ert-deftest herdr-api-request-async:delivers-a-result ()
+  "A complete asynchronous reply reaches its success callback."
+  (herdr-api-with-test-server
+      (herdr-api-test-ok '(:type "pong"))
+    (let (answer)
+      (herdr-api-request-async
+       "ping" nil
+       (lambda (result _process)
+         (setq answer result))
+       #'ignore)
+      (dotimes (_ 20)
+        (unless answer
+          (accept-process-output nil 0.02)))
+      (should (equal (gethash "type" answer) "pong")))))
+
+(ert-deftest herdr-api-request-async:delivers-after-the-filter-returns ()
+  "A reply callback must not run inside the process filter."
+  (herdr-api-with-test-server
+      (herdr-api-test-ok '(:type "pong"))
+    (let ((original-filter
+           (symbol-function 'herdr-api--async-reply-filter))
+          (inside-filter nil)
+          callback-inside-filter
+          delivered)
+      (cl-letf (((symbol-function 'herdr-api--async-reply-filter)
+                 (lambda (process chunk)
+                   (setq inside-filter t)
+                   (unwind-protect
+                       (funcall original-filter process chunk)
+                     (setq inside-filter nil)))))
+        (herdr-api-request-async
+         "ping" nil
+         (lambda (_result _process)
+           (setq callback-inside-filter inside-filter
+                 delivered t))
+         #'ignore)
+        (dotimes (_ 20)
+          (unless delivered
+            (accept-process-output nil 0.02))))
+      (should delivered)
+      (should-not callback-inside-filter))))
+
+(ert-deftest herdr-api-request-async:delivers-a-rejection ()
+  "An asynchronous rejection reaches only the error callback."
+  (herdr-api-with-test-server
+      (lambda (request)
+        (concat
+         (json-serialize
+          (list :id (gethash "id" request)
+                :error (list :code "denied" :message "not allowed")))
+         "\n"))
+    (let ((errors 0)
+          (successes 0)
+          condition)
+      (herdr-api-request-async
+       "ping" nil
+       (lambda (_result _process)
+         (cl-incf successes))
+       (lambda (error-data _process)
+         (setq condition error-data)
+         (cl-incf errors)))
+      (dotimes (_ 20)
+        (unless condition
+          (accept-process-output nil 0.02)))
+      (should (eq (car condition) 'herdr-api-rejected))
+      (should (eql errors 1))
+      (should (zerop successes)))))
+
+(ert-deftest herdr-api-request-async:reports-a-malformed-error ()
+  "A malformed error reply must reach the error callback."
+  (herdr-api-with-test-server
+      (lambda (request)
+        (concat
+         (json-serialize (list :id (gethash "id" request) :error t))
+         "\n"))
+    (let (condition)
+      (herdr-api-request-async
+       "ping" nil #'ignore
+       (lambda (error-data _process)
+         (setq condition error-data)))
+      (dotimes (_ 20)
+        (unless condition
+          (accept-process-output nil 0.02)))
+      (should (eq (car condition) 'herdr-api-error)))))
+
+(ert-deftest herdr-api-request-async:reports-an-early-close ()
+  "A connection closed without a reply must reach the error callback."
+  (herdr-api-with-test-server #'ignore
+    (let ((errors 0)
+          condition)
+      (herdr-api-request-async
+       "ping" nil #'ignore
+       (lambda (error-data _process)
+         (setq condition error-data)
+         (cl-incf errors)))
+      (dotimes (_ 20)
+        (unless condition
+          (accept-process-output nil 0.02)))
+      (should (eq (car condition) 'herdr-api-unavailable))
+      (should (string-match-p "closed" (cadr condition)))
+      (should (eql errors 1)))))
+
+(ert-deftest herdr-api-request-async:cleans-up-after-a-send-error ()
+  "A send error must close the new connection and cancel its timeout."
+  (herdr-api-with-test-server #'ignore
+    (let (connection)
+      (unwind-protect
+          (cl-letf (((symbol-function 'process-send-string)
+                     (lambda (process _string)
+                       (setq connection process)
+                       (error "Send failed"))))
+            (should-error
+             (herdr-api-request-async "ping" nil #'ignore #'ignore))
+            (should-not (process-live-p connection)))
+        (when (process-live-p connection)
+          (delete-process connection))))))
+
+(ert-deftest herdr-api-cancel-request:cancels-a-pending-request ()
+  "Cancellation must close a pending process without callbacks."
+  (herdr-api-with-test-server
+      (lambda (_request) herdr-api-test-hold)
+    (let* ((callbacks 0)
+           (process
+            (herdr-api-request-async
+             "ping" nil
+             (lambda (&rest _)
+               (cl-incf callbacks))
+             (lambda (&rest _)
+               (cl-incf callbacks)))))
+      (herdr-api-cancel-request process)
+      (accept-process-output nil 0.01)
+      (should-not (process-live-p process))
+      (should (zerop callbacks)))))
+
+(ert-deftest herdr-api-cancel-request:cancels-a-queued-callback ()
+  "Cancellation must suppress a callback queued after process completion."
+  (herdr-api-with-test-server
+      (lambda (_request) herdr-api-test-hold)
+    (let ((called nil)
+          process)
+      (setq process
+            (herdr-api-request-async
+             "ping" nil
+             (lambda (_result _process)
+               (setq called t))
+             #'ignore))
+      (herdr-api--complete-async-request
+       process
+       (json-serialize
+        (list :id (process-get process 'herdr-api-id)
+              :result (list :type "pong"))))
+      (herdr-api-cancel-request process)
+      (accept-process-output nil 0.01)
+      (should-not called))))
 
 ;;; Events
 
@@ -444,6 +627,15 @@ Counting only the successes would report a stalled session as quiet."
       (should-error (herdr-api-request "ping") :type 'herdr-api-unavailable))
     (should (equal (car (gethash "ping" herdr-api--traffic)) 1))))
 
+(ert-deftest herdr-api-request-async:counts-a-failed-connection ()
+  "An asynchronous connection failure must still count as one request."
+  (herdr-api-with-fresh-traffic
+    (let ((herdr-api-socket "/nonexistent/herdr.sock"))
+      (should-error
+       (herdr-api-request-async "ping" nil #'ignore #'ignore)
+       :type 'herdr-api-unavailable))
+    (should (equal (gethash "ping" herdr-api--traffic) '(1 0)))))
+
 (ert-deftest herdr-api-request:records-no-more-than-it-waited ()
   "A recorded wait longer than the wall clock it happened in is wrong."
   (herdr-api-with-fresh-traffic
@@ -476,6 +668,14 @@ window holding it, which is the one figure a reader checks first."
     ;; Well clear of both spans rather than exactly on one: `float-time'
     ;; rounds, so the recorded 0.3 can come back a shade under it.
     (should (> (gethash "ping" herdr-api--traffic-slowest) 0.25))))
+
+(ert-deftest herdr-api--note-request:does-not-count-async-latency-as-wait ()
+  "Asynchronous latency must count as a request without blocked time."
+  (herdr-api-with-fresh-traffic
+    (herdr-api--note-request "ping" (- (float-time) 1) 'asynchronous)
+    (should (equal (gethash "ping" herdr-api--traffic) '(1 0)))
+    (should-not (gethash "ping" herdr-api--traffic-slowest))
+    (should (zerop herdr-api--traffic-blocked))))
 
 (ert-deftest herdr-api-subscribe:counts-events-not-the-ack ()
   "Only events are counted, so the count can be read against requests."

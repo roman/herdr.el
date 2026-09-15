@@ -165,18 +165,23 @@ the per-method times; see the commentary above.")
 Takes the form `herdr-api-traffic' returns.  The report subtracts it,
 which is what lets the counts themselves go on rising.")
 
-(defun herdr-api--note-request (method start)
-  "Count one call of METHOD that began waiting at START."
-  (let* ((seconds (- (float-time) start))
+(defun herdr-api--note-request (method start &optional wait-mode)
+  "Count one call of METHOD that began at START.
+WAIT-MODE is `asynchronous' when Emacs did not block for the reply."
+  (let* ((seconds (if (eq wait-mode 'asynchronous)
+                      0
+                    (- (float-time) start)))
          (entry (gethash method herdr-api--traffic))
          (slowest (gethash method herdr-api--traffic-slowest)))
     (puthash method
              (list (1+ (or (nth 0 entry) 0))
                    (+ (or (nth 1 entry) 0) seconds))
              herdr-api--traffic)
-    (puthash method (max (or slowest 0) seconds)
-             herdr-api--traffic-slowest)
-    (when (= herdr-api--traffic-depth 1)
+    (unless (eq wait-mode 'asynchronous)
+      (puthash method (max (or slowest 0) seconds)
+               herdr-api--traffic-slowest))
+    (when (and (not (eq wait-mode 'asynchronous))
+               (= herdr-api--traffic-depth 1))
       (setq herdr-api--traffic-blocked
             (+ herdr-api--traffic-blocked seconds)))))
 
@@ -384,6 +389,59 @@ all, and leaving it out of the count would hide it."
         (herdr-api--exchange method params)
       (herdr-api--note-request method start))))
 
+(defun herdr-api-request-async (method params on-success on-error)
+  "Call METHOD with PARAMS without blocking Emacs.
+Call ON-SUCCESS with the result and process.  Call ON-ERROR with the
+condition and process when the request fails.  Both callbacks run from
+a timer after the process filter or sentinel has returned.
+
+Return the process carrying the request."
+  (let* ((start (float-time))
+         (id (herdr-api--next-id))
+         (request (herdr-api--encode id method params)))
+    (condition-case condition
+        (herdr-api--start-async-request
+         method id request start on-success on-error)
+      (herdr-api-unavailable
+       (herdr-api--note-request method start 'asynchronous)
+       (signal (car condition) (cdr condition))))))
+
+(defun herdr-api--start-async-request
+    (method id request start on-success on-error)
+  "Start an asynchronous METHOD request tagged ID.
+Send REQUEST, record START, and call ON-SUCCESS or ON-ERROR."
+  (let* ((process (herdr-api--connect "herdr-api-async"))
+         (started nil))
+    (process-put process 'herdr-api-id id)
+    (process-put process 'herdr-api-method method)
+    (process-put process 'herdr-api-start start)
+    (process-put process 'herdr-api-timeout herdr-api-timeout)
+    (process-put process 'herdr-api-on-success on-success)
+    (process-put process 'herdr-api-on-error on-error)
+    (process-put process 'herdr-api-pending "")
+    (unwind-protect
+        (progn
+          (set-process-filter process #'herdr-api--async-reply-filter)
+          (set-process-sentinel process #'herdr-api--async-sentinel)
+          (process-put process 'herdr-api-timer
+                       (run-at-time herdr-api-timeout nil
+                                    #'herdr-api--async-timeout process))
+          (process-send-string process request)
+          (setq started t)
+          process)
+      (unless started
+        (herdr-api--finish-async-request process)))))
+
+(defun herdr-api-cancel-request (process)
+  "Cancel an asynchronous request carried by PROCESS."
+  (when (processp process)
+    (process-put process 'herdr-api-canceled t)
+    (when-let* ((timer (process-get process
+                                    'herdr-api-callback-timer)))
+      (cancel-timer timer)
+      (process-put process 'herdr-api-callback-timer nil))
+    (herdr-api--finish-async-request process)))
+
 (defun herdr-api--exchange (method params)
   "Spend one connection calling METHOD with PARAMS and return its result.
 See `herdr-api-request', which is this plus the timing and is what
@@ -419,6 +477,82 @@ callers use."
   "Accumulate CHUNK on PROCESS until a whole reply line has arrived."
   (process-put process 'herdr-api-pending
                (concat (process-get process 'herdr-api-pending) chunk)))
+
+(defun herdr-api--async-reply-filter (process chunk)
+  "Complete an asynchronous PROCESS when CHUNK finishes its reply."
+  (herdr-api--reply-filter process chunk)
+  (when-let* ((line (herdr-api--pending-line process)))
+    (herdr-api--complete-async-request process line)))
+
+(defun herdr-api--async-sentinel (process _event)
+  "Report an asynchronous PROCESS that closed before answering."
+  (unless (or (process-live-p process)
+              (process-get process 'herdr-api-finished))
+    (herdr-api--fail-async-request
+     process
+     (list 'herdr-api-unavailable
+           (format "herdr closed the connection answering %s"
+                   (process-get process 'herdr-api-method))))))
+
+(defun herdr-api--async-timeout (process)
+  "Report that asynchronous PROCESS exceeded its reply timeout."
+  (unless (process-get process 'herdr-api-finished)
+    (herdr-api--fail-async-request
+     process
+     (list 'herdr-api-unavailable
+           (format "herdr did not answer %s within %s seconds"
+                   (process-get process 'herdr-api-method)
+                   (process-get process 'herdr-api-timeout))))))
+
+(defun herdr-api--complete-async-request (process line)
+  "Decode LINE and complete asynchronous PROCESS."
+  (let ((id (process-get process 'herdr-api-id))
+        (method (process-get process 'herdr-api-method))
+        (on-success (process-get process 'herdr-api-on-success))
+        (on-error (process-get process 'herdr-api-on-error)))
+    (when (herdr-api--finish-async-request process)
+      (condition-case condition
+          (herdr-api--schedule-callback
+           process on-success
+           (herdr-api--decode line id method) process)
+        (herdr-api-error
+         (herdr-api--schedule-callback
+          process on-error condition process))))))
+
+(defun herdr-api--fail-async-request (process condition)
+  "Complete asynchronous PROCESS with CONDITION."
+  (let ((on-error (process-get process 'herdr-api-on-error)))
+    (when (herdr-api--finish-async-request process)
+      (herdr-api--schedule-callback
+       process on-error condition process))))
+
+(defun herdr-api--schedule-callback (process callback &rest arguments)
+  "Schedule CALLBACK with ARGUMENTS for asynchronous PROCESS."
+  (process-put process 'herdr-api-callback-timer
+               (run-at-time 0 nil #'herdr-api--deliver-callback
+                            process callback arguments)))
+
+(defun herdr-api--deliver-callback (process callback arguments)
+  "Deliver CALLBACK with ARGUMENTS unless PROCESS was canceled."
+  (process-put process 'herdr-api-callback-timer nil)
+  (unless (process-get process 'herdr-api-canceled)
+    (apply callback arguments)))
+
+(defun herdr-api--finish-async-request (process)
+  "Clean up PROCESS and return non-nil on its first completion."
+  (unless (process-get process 'herdr-api-finished)
+    (process-put process 'herdr-api-finished t)
+    (when-let* ((timer (process-get process 'herdr-api-timer)))
+      (cancel-timer timer))
+    (set-process-filter process #'ignore)
+    (set-process-sentinel process #'ignore)
+    (when (process-live-p process)
+      (delete-process process))
+    (herdr-api--note-request
+     (process-get process 'herdr-api-method)
+     (process-get process 'herdr-api-start)
+     'asynchronous)
+    t))
 
 (defun herdr-api--pending-line (process)
   "Return the first complete line PROCESS has accumulated, or nil."
@@ -457,6 +591,10 @@ Signal `herdr-api-rejected' when herdr reports an error, and
     ;; Before the identifier, because herdr answers a request it could not
     ;; parse with an empty one.
     (when-let* ((body (gethash "error" reply)))
+      (unless (hash-table-p body)
+        (signal 'herdr-api-error
+                (list (format "herdr answered %s with a malformed error"
+                              method))))
       (signal 'herdr-api-rejected
               (list (format "%s: %s (%s)" method
                             (gethash "message" body)
