@@ -2,7 +2,8 @@
 #
 # Every program the harness runs comes from here, so two machines that enter
 # this shell measure the same Emacs, herdr, and tools. The scripts start
-# through `env bash` and find these first on PATH.
+# through `env bash` and find these first on PATH. `run.sh` uses the
+# `emacs` on PATH unless EMACS overrides it.
 #
 # No HERDR_SOCKET_PATH here, unlike the integration shell: `perf/fixture.sh`
 # starts its own server under the fixture directory and writes the socket path
@@ -15,7 +16,8 @@ pkgs.mkShell {
     pkgs.herdr
     # stdenv already carries both. They are listed because the scripts
     # depend on them by name: bash through `env bash`, and GNU coreutils so
-    # that macOS runs the same `seq`, `mktemp` and `sleep` as Linux.
+    # that macOS runs the same `seq`, `mktemp` and `sleep` as Linux, and has
+    # the `timeout` that `run.sh` needs.
     pkgs.bash
     pkgs.coreutils
     pkgs.git
