@@ -27,7 +27,10 @@
     # libghostty-vt (Zig) build. Do not `follows` nixpkgs here: this flake's
     # channel may lack the toolchain that build expects, and letting herdr keep
     # its locked inputs matches how upstream tests the package.
-    herdr.url = "github:herdrdev/herdr";
+    #
+    # Pinned to a release tag rather than the default branch, so the herdr
+    # every shell and the perf harness run against is one users can install.
+    herdr.url = "github:herdrdev/herdr/v0.9.3";
   };
 
   outputs =
