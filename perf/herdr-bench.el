@@ -265,9 +265,11 @@ Each figure is nil when this herdr.el predates `herdr-api-traffic'."
 
 (defun herdr-bench--save-profile (file)
   "Stop the CPU profiler and save its fully expanded report to FILE.
-Text can be read over SSH and compared between runs with `diff'."
+Text can be read over SSH and compared between runs with `diff'.
+The profiler is stopped first, because `profiler-stop' is what copies
+the samples into `profiler-cpu-log', which `profiler-cpu-profile' reads."
+  (profiler-stop)
   (let ((buffer (profiler-report-setup-buffer (profiler-cpu-profile))))
-    (profiler-stop)
     (with-current-buffer buffer
       (goto-char (point-min))
       (while (not (eobp))
