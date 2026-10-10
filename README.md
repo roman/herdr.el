@@ -162,7 +162,7 @@ the session starts itself if nothing has started it yet.
       '(("claude" . "✳")
         ("codex" . "◆")))
 (setq herdr-api-socket "~/.config/herdr/sessions/work/herdr.sock") ;; (6)
-(setq herdr-spaces-git nil)                    ;; (7)
+(setq herdr-spaces-git t)                      ;; (7)
 (setq herdr-panel-attention-pulses 3)          ;; (8)
 (setq herdr-panel-attention-pulse-interval 0.4)
 
@@ -276,12 +276,13 @@ Only the frame stream uses herdr's command line. Everything structural goes
 over the JSON API socket, which herdr documents for third-party tools.
 herdr.el never speaks the private binary client protocol.
 
-### (7) Git state costs a subprocess
+### (7) Git state is opt in
 
 herdr computes the branch and dirty state it draws on a space but puts
-neither on the wire, so herdr.el asks git itself, cached for
-`herdr-spaces-git-ttl` seconds. Set `herdr-spaces-git` to nil if you would
-rather it did not.
+neither on the wire, so herdr.el can ask git itself, cached for
+`herdr-spaces-git-ttl` seconds. Each call blocks Emacs until git answers,
+so this is off by default. Set `herdr-spaces-git` to t to show the
+branch and dirty state.
 
 ### (8) A row wanting you flashes rather than staying lit
 

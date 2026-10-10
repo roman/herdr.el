@@ -67,10 +67,12 @@
   :group 'herdr-panel
   :type 'string)
 
-(defcustom herdr-spaces-git t
+(defcustom herdr-spaces-git nil
   "Whether to show the branch and working tree state of a workspace.
-This runs git once per workspace per `herdr-spaces-git-ttl', which on
-a very large repository is worth knowing about."
+This runs git once per workspace per `herdr-spaces-git-ttl', and each
+run blocks Emacs until git answers.  On a large repository, or on a
+machine where an endpoint agent vets every process launch, that adds
+up to seconds of blocking per minute, so it is off by default."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-panel
   :type 'boolean)
