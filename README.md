@@ -110,11 +110,11 @@ Each panel also opens on its own — `M-x herdr-spaces`, `M-x herdr-agents`,
 Walking a panel is the right way to browse. Once you know where you are
 going, typing the name is quicker, and three commands read one:
 
-| Command              | Reads                                            |
-|----------------------|--------------------------------------------------|
-| `herdr-spaces-visit` | every workspace, in the panel's grouped order    |
-| `herdr-agents-visit` | every agent, the ones wanting attention first    |
-| `herdr-review-visit` | every open review, the ones waiting on you first |
+| Command              | Reads                                                              |
+|----------------------|--------------------------------------------------------------------|
+| `herdr-spaces-visit` | every workspace, in the panel's grouped order                      |
+| `herdr-agents-visit` | every agent on every machine, the ones wanting attention first |
+| `herdr-review-visit` | every open review on every machine, the ones waiting on you first |
 
 Each prompts with the same line the panel draws — status mark, name, and
 the notes underneath brought up onto the end of it — so the directory
@@ -186,6 +186,12 @@ every herdr client sees a blocked review without being taught anything.
 In the panel, `+` starts a review of the workspace at point and `-` ends it.
 A workspace holds one review at a time; asking for a second goes to the
 first. Point that at your own tool by setting `herdr-review-program`.
+
+Reviews and agents on a saved SSH machine are listed beside the local ones,
+under that machine's name, and open on that machine. The script runs only
+here, so `+` and `-` act on local workspaces; start a remote review on its
+own machine. The remote rows come from the machine probe that the Spaces
+panel runs, so without that panel they can be missing or out of date.
 
 When a new review appears while the herdr layout is visible, its terminal
 replaces the terminal in the main window and takes control. Later session
