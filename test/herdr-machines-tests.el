@@ -70,6 +70,18 @@
                  0)))
       (should-not (herdr-machines--read-profiles)))))
 
+(ert-deftest herdr-machines--read-profiles:reads-a-disabled-machine-as-disabled ()
+  "A profile the CLI reports as disabled is not probed."
+  (let ((herdr-machines--profiles nil)
+        (herdr-machines--statuses (make-hash-table :test #'equal)))
+    (cl-letf (((symbol-function 'process-file)
+               (lambda (&rest _arguments)
+                 (insert "[{\"id\":\"machine\",\"enabled\":false}]")
+                 0)))
+      (should (eq (herdr-machines--status
+                   (car (herdr-machines--read-profiles)))
+                  'disabled)))))
+
 (ert-deftest herdr-machines--probe-result:maps-success-to-online ()
   "A successful server probe marks its machine online."
   (let ((herdr-machines--statuses (make-hash-table :test #'equal)))
@@ -101,6 +113,25 @@
                                                     herdr-machines--snapshots))
                                   0))
                    "w1"))))
+
+(ert-deftest herdr-machines--probe-result:reads-false-in-the-snapshot-as-nil ()
+  "A false field in a remote snapshot is nil, as in the local tree."
+  (let ((herdr-machines--statuses (make-hash-table :test #'equal))
+        (herdr-machines--snapshots (make-hash-table :test #'equal)))
+    (herdr-machines--record-probe-result
+     "machine" 0 (concat "{\"running\":true,\"socket\":\"/tmp/herdr.sock\","
+                         "\"endpoint_compatible\":true,"
+                         "\"capabilities\":{\"surface_interest\":true,"
+                         "\"health_check\":true}}\036"
+                         "{\"result\":{\"snapshot\":{"
+                         "\"workspaces\":[],\"tabs\":[],\"agents\":[],"
+                         "\"panes\":[{\"pane_id\":\"w1:p1\",\"focused\":false}]}}}"
+                         "\036/usr/bin/herdr"))
+    (should-not (gethash "focused"
+                         (aref (gethash "panes"
+                                        (gethash "machine"
+                                                 herdr-machines--snapshots))
+                               0)))))
 
 (ert-deftest herdr-machines--probe-result:rejects-a-stopped-server ()
   "A reached machine with a stopped server needs attention."

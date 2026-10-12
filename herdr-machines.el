@@ -122,7 +122,10 @@
                                    "machine" "list" "--json"))
                    1))
         (condition-case nil
-            (json-parse-string (buffer-string) :array-type 'list)
+            ;; A JSON false must read as nil: `enabled' is tested for
+            ;; truth, and the default `:false' is a non-nil keyword.
+            (json-parse-string (buffer-string) :array-type 'list
+                               :false-object nil :null-object nil)
           (json-parse-error herdr-machines--profiles))
       herdr-machines--profiles)))
 
@@ -272,7 +275,11 @@
     (if (and (eq status 'online) (cadr parts))
         (condition-case nil
             (let* ((server (json-parse-string (car parts)))
-                   (response (json-parse-string (cadr parts)))
+                   ;; Parsed like the local tree in herdr-api, so the
+                   ;; session readers see a false field as nil here too.
+                   (response (json-parse-string (cadr parts)
+                                                :false-object nil
+                                                :null-object nil))
                    (result (gethash "result" response))
                    (snapshot (and result (gethash "snapshot" result))))
               (if (and snapshot
