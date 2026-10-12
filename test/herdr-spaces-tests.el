@@ -161,9 +161,7 @@ and none of what it answers is what these tests are about."
                     ((symbol-function 'herdr-machines-refresh) #'ignore))
             (herdr-spaces-mode))
           (fundamental-mode)
-          (should-not (memq timer timer-list))
-          (should-not (memq #'herdr-spaces--refresh-existing
-                            herdr-machines-change-hook)))
+          (should-not (memq timer timer-list)))
       (when (timerp timer)
         (cancel-timer timer)))))
 
@@ -190,13 +188,6 @@ and none of what it answers is what these tests are about."
                (lambda (_directory)
                  (ert-fail "asked the local filesystem"))))
       (should-not (herdr-spaces--git "/shared/path")))))
-
-(ert-deftest herdr-spaces--refresh-existing:does-not-recreate-a-closed-panel ()
-  "A late machine result leaves a closed spaces panel closed."
-  (let ((herdr-spaces-buffer-name " *closed-herdr-spaces-test*"))
-    (should-not (get-buffer herdr-spaces-buffer-name))
-    (herdr-spaces--refresh-existing)
-    (should-not (get-buffer herdr-spaces-buffer-name))))
 
 (defun herdr-spaces-tests--fill-at (text)
   "Return the faces on the first character of TEXT, as a list.

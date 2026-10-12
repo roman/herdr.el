@@ -437,16 +437,7 @@ been asked for."
 With a prefix argument OTHER, open it the other way round from
 `herdr-panel-visit-access', as the panels' own visit commands do."
   (interactive (list (herdr-ui--read-pane) current-prefix-arg))
-  (if (listp pane)
-      (let* ((machine (plist-get pane :machine))
-             (connection (herdr-machines-connection machine)))
-        (if connection
-            (herdr-term-open (plist-get pane :pane)
-                             (eq (herdr-panel-access other) 'control)
-                             connection)
-          (herdr-panel-open-pane (plist-get pane :pane)
-                                 (herdr-panel-access other))))
-    (herdr-panel-open-pane pane (herdr-panel-access other))))
+  (herdr-machines-visit pane (herdr-panel-access other)))
 
 (defun herdr-ui--read-pane ()
   "Read a pane of the session with completion and return it.

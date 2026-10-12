@@ -50,11 +50,13 @@
   "What the last stubbed `completing-read' was offered, in order.")
 
 (defmacro herdr-panel-tests-offline (&rest body)
-  "Evaluate BODY with a reader asking for no session.
+  "Evaluate BODY with a reader asking for no session and no machine.
 Every reader makes sure of a tree before it builds its rows, and there
-is no server here to answer for one."
+is no server here to answer for one, nor any saved machine to probe."
   (declare (indent 0) (debug t))
-  `(cl-letf (((symbol-function 'herdr-panel-ensure-session) #'ignore))
+  `(cl-letf (((symbol-function 'herdr-panel-ensure-session) #'ignore)
+             ((symbol-function 'herdr-session-start) #'ignore)
+             ((symbol-function 'herdr-machines-refresh) #'ignore))
      ,@body))
 
 (defmacro herdr-panel-tests-choosing (nth &rest body)
@@ -714,6 +716,46 @@ typed, and a command calling it has to hand the argument over."
   "One binding covers every panel, because they all inherit this map."
   (should (eq (keymap-lookup herdr-panel-mode-map "<mouse-1>")
               #'herdr-panel-visit-click)))
+
+;;; Opening A Row On Its Machine
+
+(ert-deftest herdr-panel-visit:opens-a-remote-row-on-its-machine ()
+  "A row may stand for a pane on another machine, and RET reaches it.
+The panel hands the row's answer to the one function that opens a pane
+through a machine's connection, rather than to the local opener."
+  ;; Loaded first, or the `require' inside the command would put the real
+  ;; definition back over the stub.
+  (require 'herdr-machines)
+  (let ((herdr-panel-visit-access 'control)
+        visited)
+    (with-temp-buffer
+      (setq-local herdr-panel-pane-function
+                  (lambda () '(:machine (:id "general-dev") :pane "w3:p2")))
+      (cl-letf (((symbol-function 'herdr-machines-visit)
+                 (lambda (target access) (setq visited (list target access))))
+                ((symbol-function 'herdr-panel-open-pane)
+                 (lambda (&rest _) (ert-fail "Opened as a local pane"))))
+        (herdr-panel-visit '(4))
+        (should (equal visited
+                       '((:machine (:id "general-dev") :pane "w3:p2")
+                         observe)))))))
+
+;;; Keeping Up With Every Machine
+
+(defvar herdr-machines-change-hook)
+
+(ert-deftest herdr-panel-watch:redraws-on-a-machine-change ()
+  "A remote machine reports its changes through its probe.
+Without this, a panel listing a remote review would wait for the local
+session to move before showing it."
+  (let ((herdr-machines-change-hook nil)
+        (herdr-session-change-hook nil)
+        (window-selection-change-functions nil)
+        (window-buffer-change-functions nil)
+        (herdr-session-fingerprint-functions nil))
+    (cl-letf (((symbol-function 'herdr-session-live-p) (lambda () t)))
+      (herdr-panel-watch)
+      (should (memq #'herdr-panel-refresh-all herdr-machines-change-hook)))))
 
 ;;; Choosing How To Open
 

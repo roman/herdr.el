@@ -795,6 +795,8 @@ the variable below is declared here and given its value there, and
 (declare-function herdr-term-open "herdr-term"
                   (pane &optional writable connection))
 (declare-function herdr-term-take-control "herdr-term" ())
+(declare-function herdr-term--buffer "herdr-term" (pane &optional connection))
+(declare-function herdr-machines-visit "herdr-machines" (target access))
 
 ;;; Panels
 
@@ -1055,8 +1057,11 @@ With a prefix argument OTHER, open it the other way round from
   (interactive "P")
   (unless herdr-panel-pane-function
     (user-error "Not in a herdr panel"))
-  (herdr-panel-open-pane (funcall herdr-panel-pane-function)
-                         (herdr-panel-access other)))
+  ;; A row may stand for a pane on another machine, which only that
+  ;; machine's connection reaches.
+  (require 'herdr-machines)
+  (herdr-machines-visit (funcall herdr-panel-pane-function)
+                        (herdr-panel-access other)))
 
 (defun herdr-panel-visit-click (event)
   "Show the terminal for the row EVENT was clicked on.
@@ -1376,6 +1381,9 @@ fact about Emacs, so no event from herdr will report any of it."
   "Keep the panels current with the session and with the selection.
 Idempotent, so every panel may call it as it opens."
   (add-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
+  ;; A panel lists every machine, and a remote one reports its changes
+  ;; through its probe rather than through the session.
+  (add-hook 'herdr-machines-change-hook #'herdr-panel-refresh-all)
   ;; Ahead of that redraw on the same hook, so a row that has just begun
   ;; wanting the user is already pulsing by the time it is drawn.
   (add-hook 'herdr-session-change-hook #'herdr-panel--note-attention -50)
@@ -1398,6 +1406,7 @@ Idempotent, so every panel may call it as it opens."
                                           buffer))
                     (buffer-list))
     (remove-hook 'herdr-session-change-hook #'herdr-panel-refresh-all)
+    (remove-hook 'herdr-machines-change-hook #'herdr-panel-refresh-all)
     (remove-hook 'herdr-session-change-hook #'herdr-panel--note-attention)
     (remove-hook 'window-selection-change-functions #'herdr-panel--note-marks)
     (remove-hook 'window-selection-change-functions
@@ -1452,10 +1461,11 @@ with the other evicted."
     (set-window-buffer window buffer)
     window))
 
-(defun herdr-panel-open-pane (pane &optional access)
+(defun herdr-panel-open-pane (pane &optional access connection)
   "Show the terminal for PANE and move to it.
 ACCESS is `control' to open a terminal that takes what is typed at it,
-and `observe' or nil to open one that only shows the pane.  Only one
+and `observe' or nil to open one that only shows the pane.  CONNECTION
+names the remote server PANE is on, and is nil for the local one.  Only one
 client at a time holds control of a pane, so a panel visiting a row
 observes: browsing a list of panes is not a reason to take control of
 each in turn.
@@ -1471,14 +1481,13 @@ visited, because that highlight follows the selected window."
   ;; Going to a pane on purpose is reading whatever it finished.  Nothing
   ;; else clears the mark, because a pane sits on screen for as long as
   ;; anybody works in the layout and clearing on that would clear at once.
-  (herdr-session-mark-seen pane)
+  ;; The marks are kept for local panes only.
+  (unless connection
+    (herdr-session-mark-seen pane))
   (let ((display-buffer-overriding-action
          '((herdr-panel--display-in-main))))
-    (herdr-term-open pane (eq access 'control)))
-  (when-let* ((buffer (seq-find (lambda (buffer)
-                                  (equal (herdr-panel--buffer-pane buffer)
-                                         pane))
-                                (buffer-list))))
+    (herdr-term-open pane (eq access 'control) connection))
+  (when-let* ((buffer (herdr-term--buffer pane connection)))
     ;; A terminal already on screen is shown as it stands, so asking for
     ;; control has to say so again here.  Otherwise a pane first opened
     ;; from a panel that was only reading would go on ignoring what was

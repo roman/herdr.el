@@ -29,6 +29,7 @@
 (require 'ert)
 
 (require 'herdr-agents)
+(require 'herdr-machines-tests)
 (require 'herdr-panel-tests)
 (require 'herdr-session-tests)
 
@@ -124,6 +125,26 @@ exists to raise."
         (should (equal (herdr-agents--read) "w1:p3"))
         (should (eql (length herdr-panel-tests--offered) 3))))))
 
+(ert-deftest herdr-agents--read:offers-agents-on-every-machine ()
+  "An agent on a remote machine is offered beside the local ones.
+Its answer names the machine, so visiting it goes through that
+machine's connection rather than to a local pane of the same name."
+  (herdr-session-with-snapshot
+      (herdr-agents-tests--panes
+       (herdr-agents-tests--agent "w1:p1" "claude" "idle"))
+    (herdr-machines-tests-with-remote
+        (herdr-agents-tests--panes
+         (herdr-agents-tests--agent "w1:p1" "claude" "blocked"))
+      (herdr-panel-tests-offline
+        (herdr-panel-tests-choosing 0
+          (should (equal (herdr-agents--read)
+                         '(:machine (:id "general-dev" :label "general-dev"
+                                     :status online)
+                           :pane "w1:p1")))
+          (should (eql (length herdr-panel-tests--offered) 2))
+          (should (string-match-p "general-dev"
+                                  (car herdr-panel-tests--offered))))))))
+
 (ert-deftest herdr-agents--read:refuses-when-there-is-nothing-to-name ()
   "A session with no agent says so rather than raising an empty prompt."
   (herdr-session-with-snapshot (herdr-agents-tests--panes)
@@ -134,23 +155,20 @@ exists to raise."
 
 (ert-deftest herdr-agents-refresh:uses-the-shared-item-spacing ()
   "Agent rows use the same leading and inter-entry gaps as other panels."
-  (let ((agents (list (herdr-agents-tests--agent
-                       "w1:p1" "claude" "working")
-                      (herdr-agents-tests--agent
-                       "w1:p2" "codex" "idle")))
+  (let ((rows (list (cons "w1:p1" (list :status "working" :label "a"))
+                    (cons "w1:p2" (list :status "idle" :label "b"))))
         (herdr-agents-buffer-name " *herdr-agents-spacing-test*")
         received)
     (unwind-protect
-        (cl-letf (((symbol-function 'herdr-agents--sorted)
-                   (lambda () agents))
-                  ((symbol-function 'herdr-panel-current-pane) #'ignore)
+        (cl-letf (((symbol-function 'herdr-machines-rows)
+                   (lambda (&rest _) rows))
                   ((symbol-function 'herdr-panel-insert-items)
                    (lambda (items insert-function)
                      (setq received items)
                      (mapc insert-function items)))
                   ((symbol-function 'herdr-agents--insert) #'ignore))
           (herdr-agents-refresh)
-          (should (equal received agents)))
+          (should (equal received rows)))
       (when-let* ((buffer (get-buffer herdr-agents-buffer-name)))
         (kill-buffer buffer)))))
 

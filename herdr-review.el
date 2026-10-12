@@ -52,6 +52,7 @@
 (require 'seq)
 
 (require 'herdr-agents)
+(require 'herdr-machines)
 (require 'herdr-panel)
 (require 'herdr-session)
 
@@ -169,22 +170,24 @@ form `herdr-ui-panels' names to put the panel in a column."
 ;;;###autoload
 (defun herdr-review-visit (pane &optional other)
   "Show the terminal for the review running in PANE.
-PANE is read with completion over the reviews herdr is reporting, the
-ones waiting on you first, exactly as the panel lists them.  With a
-prefix argument OTHER, open it the other way round from
-`herdr-panel-visit-access', as pressing RET on the row would.
+PANE is read with completion over the reviews herdr is reporting on
+every machine, the ones waiting on you first, exactly as the panel
+lists them.  It is a pane, or for a remote machine what
+`herdr-machines-target' makes of one.  With a prefix argument OTHER,
+open it the other way round from `herdr-panel-visit-access', as
+pressing RET on the row would.
 
 This goes to a review that is already open.  `herdr-review-open' is
 what starts one."
   (interactive (list (herdr-review--read) current-prefix-arg))
-  (herdr-panel-open-pane pane (herdr-panel-access other)))
+  (herdr-machines-visit pane (herdr-panel-access other)))
 
 (defun herdr-review--read ()
-  "Read a review with completion and return the pane holding it."
-  (herdr-panel-read-nodes "Review: "
-                          #'herdr-review-list
-                          #'herdr-review--entry
-                          "Nothing is waiting to be reviewed"))
+  "Read a review with completion and return its target."
+  (herdr-machines-read-nodes "Review: "
+                             #'herdr-review-list
+                             #'herdr-review--entry
+                             "Nothing is waiting to be reviewed"))
 
 (defun herdr-review-refresh ()
   "Redraw the reviews panel from the session tree."
@@ -194,11 +197,10 @@ what starts one."
       (magit-insert-section (herdr-review-root)
         (herdr-panel-insert-title
          "Reviews" (and herdr-review-border 'herdr-panel-border))
-        (let ((reviews (herdr-review-list))
-              (current (herdr-panel-current-pane)))
-          (if reviews
-              (dolist (review reviews)
-                (herdr-review--insert review current))
+        (let ((rows (herdr-machines-rows #'herdr-review-list
+                                         #'herdr-review--entry)))
+          (if rows
+              (mapc #'herdr-review--insert rows)
             (insert (propertize "  nothing to review\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))
@@ -234,7 +236,7 @@ walked away from."
 ;;; Reading the Session
 
 (defun herdr-review-list ()
-  "Return the reviews herdr is reporting, the ones waiting first.
+  "Return the reviews in the current tree, the ones waiting first.
 A review is an agent of kind `herdr-review-agent', which is what the
 herdr-review script reports each one as."
   (seq-sort-by (lambda (review)
@@ -260,9 +262,14 @@ review row all answer with a pane, and the pane names the workspace.
 So a review can be opened from any panel, and none of their rendering
 is this file's business."
   (when-let* ((at-point herdr-panel-pane-function)
-              (pane-id (ignore-errors (funcall at-point)))
-              (pane (herdr-session-pane pane-id)))
-    (gethash "workspace_id" pane)))
+              (pane-id (ignore-errors (funcall at-point))))
+    ;; The script runs here and knows only the local server.  Falling back
+    ;; to the workspace on screen would review the wrong checkout.
+    (when (consp pane-id)
+      (user-error "Open a review on %s from that machine"
+                  (plist-get (plist-get pane-id :machine) :label)))
+    (when-let* ((pane (herdr-session-pane pane-id)))
+      (gethash "workspace_id" pane))))
 
 ;;; Rendering
 
@@ -278,10 +285,10 @@ beneath it, as the script counted it when the review opened."
         :aside (herdr-panel-text herdr-review-icon 'herdr-review-icon)
         :detail (herdr-review--summary review)))
 
-(defun herdr-review--insert (review current)
-  "Insert an entry for REVIEW, emphasised against the CURRENT pane."
-  (magit-insert-section (herdr-review-entry (gethash "pane_id" review))
-    (herdr-panel-insert-entry (herdr-review--entry review current))))
+(defun herdr-review--insert (row)
+  "Insert ROW, a (TARGET . ENTRY) pair from `herdr-machines-rows'."
+  (magit-insert-section (herdr-review-entry (car row))
+    (herdr-panel-insert-entry (cdr row))))
 
 (defun herdr-review--label (review)
   "Return the name of the workspace REVIEW is reviewing."
@@ -328,6 +335,8 @@ the same as one nobody asked for."
 
 (defun herdr-review--open-new-review ()
   "Open a newly reported review in the main herdr window."
+  ;; Local reviews only: this runs when the local session changes, with
+  ;; the local tree current.
   (let* ((panes (herdr-review--panes))
          (new-pane (seq-find (lambda (pane)
                                (not (member pane

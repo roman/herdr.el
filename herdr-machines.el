@@ -314,6 +314,130 @@
   (seq-filter (lambda (machine) (eq (plist-get machine :status) 'online))
               (herdr-machines-list)))
 
+;;; Every Machine's Tree
+
+;; A panel that lists one kind of node, agents or reviews, reads it out of
+;; the session tree with the `herdr-session' readers.  Those readers read
+;; whichever tree is current, so binding each machine's snapshot in turn
+;; lets the same reader answer for every machine.  What the panel gets back
+;; for a node is a target, which `herdr-machines-visit' opens through the
+;; connection of the machine it names.
+
+(defun herdr-machines-collect (function)
+  "Return FUNCTION's lists for each machine, joined in order.
+FUNCTION is called with each machine that has a session snapshot, with
+that snapshot as the current session tree.  The local machine comes
+first."
+  (seq-mapcat (lambda (machine)
+                (when-let* ((snapshot (plist-get machine :snapshot)))
+                  (let ((herdr-session--snapshot snapshot))
+                    (funcall function machine))))
+              (herdr-machines-list)))
+
+(defun herdr-machines-target (machine pane)
+  "Return what `herdr-machines-visit' takes to open PANE on MACHINE.
+A local pane is its identifier.  A remote one is a plist naming the
+machine, without its snapshot: a panel keeps the target as a row's
+section value, and a tree replaced on every probe would make the row
+a different one after each probe."
+  (if (equal (plist-get machine :id) "local")
+      pane
+    (list :machine (list :id (plist-get machine :id)
+                         :label (plist-get machine :label)
+                         :status (plist-get machine :status))
+          :pane pane)))
+
+(defun herdr-machines-rows (nodes-function entry)
+  "Return (TARGET . ROW) for the nodes on every machine, attention first.
+NODES-FUNCTION and ENTRY are as in `herdr-panel-read-nodes', and each
+is called with one machine's tree current.  Ties keep the order
+NODES-FUNCTION gave, local machine first.
+
+A pane identifier is unique only on its own server, so a row's
+emphasis is worked out here, against the machine of each terminal, and
+replaces the one ENTRY drew from the identifier alone.  A remote row
+carries its machine's name beside it, and an `:id' that names the
+machine, because pulses are keyed by `:id' and track local panes."
+  (let* ((terminal (herdr-panel-current-terminal-buffer))
+         (current (and terminal (herdr-panel--buffer-pane terminal)))
+         (current-machine (herdr-machines-buffer-machine-id terminal)))
+    (seq-sort-by
+     (lambda (row)
+       (herdr-session-status-priority (plist-get (cdr row) :status)))
+     #'>
+     (herdr-machines-collect
+      (lambda (machine)
+        (let ((id (plist-get machine :id)))
+          (mapcar
+           (lambda (node)
+             (let* ((pane (gethash "pane_id" node))
+                    (target (herdr-machines-target machine pane))
+                    (emphasis
+                     (cond ((and (equal pane current)
+                                 (equal id current-machine))
+                            'current)
+                           ((herdr-machines-pane-open-p id pane) 'open)
+                           (t 'closed)))
+                    (row (funcall entry node nil)))
+               (cons target
+                     (append (list :emphasis emphasis)
+                             (unless (equal id "local")
+                               (list :id target
+                                     :aside (herdr-machines--aside
+                                             (plist-get row :aside)
+                                             machine)))
+                             row))))
+           (funcall nodes-function))))))))
+
+(defun herdr-machines-buffer-machine-id (buffer)
+  "Return the identifier of the machine terminal BUFFER mirrors."
+  (let ((connection (and buffer
+                         (boundp 'herdr-term--connection)
+                         (buffer-local-value 'herdr-term--connection buffer))))
+    (or (plist-get connection :id) "local")))
+
+(defun herdr-machines-pane-open-p (machine-id pane)
+  "Return non-nil when a buffer mirrors PANE on the machine MACHINE-ID."
+  (and pane
+       (seq-some
+        (lambda (buffer)
+          (and (equal (herdr-panel--buffer-pane buffer) pane)
+               (equal (herdr-machines-buffer-machine-id buffer) machine-id)))
+        (buffer-list))
+       t))
+
+(defun herdr-machines-visit (target access)
+  "Show the terminal for TARGET and move to it, opened with ACCESS.
+TARGET is a pane, or the plist `herdr-machines-target' makes for one
+on a remote machine.  ACCESS is as in `herdr-panel-open-pane'."
+  (if (consp target)
+      (herdr-panel-open-pane (plist-get target :pane) access
+                             (herdr-machines-connection
+                              (plist-get target :machine)))
+    (herdr-panel-open-pane target access)))
+
+(defun herdr-machines--aside (aside machine)
+  "Return ASIDE with the name of remote MACHINE after it."
+  (let ((label (plist-get machine :label)))
+    (if (and aside (not (string-empty-p aside)))
+        (concat aside " " label)
+      label)))
+
+(defun herdr-machines-read-nodes (prompt nodes-function entry empty)
+  "Read one of a panel's nodes on any machine and return its target.
+PROMPT, NODES-FUNCTION, ENTRY and EMPTY are as in
+`herdr-panel-read-nodes'.  The nodes come from every machine that is
+online, as `herdr-machines-rows' lists them, and the answer is what
+`herdr-machines-target' makes of the chosen one."
+  (herdr-panel-read-rows
+   prompt
+   (lambda (_current)
+     (herdr-machines-refresh-online)
+     (mapcar (lambda (row)
+               (cons (herdr-panel-entry-line (cdr row)) (car row)))
+             (herdr-machines-rows nodes-function entry)))
+   empty))
+
 (defun herdr-machines-read-online ()
   "Return an online machine, prompting when more than one is available."
   (let ((machines (herdr-machines-refresh-online)))

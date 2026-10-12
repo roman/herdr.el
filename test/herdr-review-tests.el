@@ -34,6 +34,7 @@
 
 (require 'herdr-review)
 (require 'herdr-ui)
+(require 'herdr-machines-tests)
 (require 'herdr-panel-tests)
 (require 'herdr-session-tests)
 
@@ -111,6 +112,15 @@ panel draws its rows."
       (setq-local herdr-panel-pane-function (lambda () "w1:p1"))
       (should (equal (herdr-review--workspace-at-point) "w1")))))
 
+(ert-deftest herdr-review--workspace-at-point:refuses-a-remote-row ()
+  "The review script runs here, so it cannot open a review over there.
+Falling back to the workspace on screen would open a review of the
+wrong checkout."
+  (with-temp-buffer
+    (setq-local herdr-panel-pane-function
+                (lambda () '(:machine (:id "general-dev") :pane "w3:p2")))
+    (should-error (herdr-review--workspace-at-point) :type 'user-error)))
+
 (ert-deftest herdr-review--workspace-at-point:answers-nothing-off-a-row ()
   "A panel signals when point is on no row; that is not an answer."
   (herdr-session-with-snapshot (list :panes (vector))
@@ -136,6 +146,41 @@ with."
       (herdr-panel-tests-choosing 0
         (should (equal (herdr-review--read) "w2:p1"))
         (should (eql (length herdr-panel-tests--offered) 2))))))
+
+(ert-deftest herdr-review--read:offers-reviews-on-every-machine ()
+  "A review open on a remote machine is offered, waiting ones first.
+The answer names the machine, because the same pane identifier on the
+local server is some other pane."
+  (herdr-session-with-snapshot
+      (list :agents
+            (vector (herdr-review-tests--agent "w1:p2" "review" "idle")))
+    (herdr-machines-tests-with-remote
+        (list :agents
+              (vector (herdr-review-tests--agent "w3:p2" "review" "blocked"
+                                                 "w3")))
+      (herdr-panel-tests-offline
+        (herdr-panel-tests-choosing 0
+          (should (equal (herdr-review--read)
+                         '(:machine (:id "general-dev" :label "general-dev"
+                                     :status online)
+                           :pane "w3:p2")))
+          (should (eql (length herdr-panel-tests--offered) 2)))))))
+
+(ert-deftest herdr-review-refresh:lists-a-remote-review ()
+  "The panel draws a review on another machine and says which machine."
+  (herdr-session-with-snapshot (list :agents (vector))
+    (herdr-machines-tests-with-remote
+        (list :agents
+              (vector (herdr-review-tests--agent "w3:p2" "review" "blocked"
+                                                 "w3")))
+      (unwind-protect
+          (progn
+            (herdr-review-refresh)
+            (with-current-buffer herdr-review-buffer-name
+              (should-not (string-match-p "nothing to review"
+                                          (buffer-string)))
+              (should (string-match-p "general-dev" (buffer-string)))))
+        (kill-buffer herdr-review-buffer-name)))))
 
 (ert-deftest herdr-review--read:refuses-when-nothing-is-waiting ()
   "No review is an ordinary state, and says so rather than prompting."

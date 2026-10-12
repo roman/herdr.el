@@ -27,6 +27,7 @@
 (require 'cl-lib)
 
 (require 'herdr-machines)
+(require 'herdr-session-tests)
 
 (defun herdr-machines-tests--profile (&optional enabled)
   "Return a Baker profile whose ENABLED state is explicit."
@@ -233,6 +234,91 @@
                (lambda () (list '(:id "local" :status online)))))
       (herdr-machines-read-online)
       (should started))))
+
+;;; Every Machine's Tree
+
+(defvar herdr-machines-tests--remote nil
+  "The session tree `herdr-machines-tests-with-remote' gives general-dev.")
+
+(defmacro herdr-machines-tests-with-remote (snapshot &rest body)
+  "Evaluate BODY with an online remote machine holding SNAPSHOT.
+SNAPSHOT is a plist in the shape herdr answers `session.snapshot' with.
+The remote machine is called general-dev.  The local machine keeps
+whatever tree is current, so this nests inside
+`herdr-session-with-snapshot'."
+  (declare (indent 1) (debug t))
+  `(let ((herdr-machines-tests--remote
+          (json-parse-string (json-serialize ,snapshot)
+                             :false-object nil :null-object nil)))
+     (cl-letf (((symbol-function 'herdr-machines-list)
+                (lambda ()
+                  (list (list :id "local" :label "Local" :status 'online
+                              :snapshot herdr-session--snapshot)
+                        (list :id "general-dev" :label "general-dev"
+                              :status 'online
+                              :snapshot herdr-machines-tests--remote)))))
+       ,@body)))
+
+(ert-deftest herdr-machines-target:names-the-remote-machine ()
+  "A remote target carries what a connection needs and not the tree.
+A panel keeps the target as its row's section value, and a tree that
+is replaced on every probe would make the row a new one each time."
+  (should (equal (herdr-machines-target
+                  (list :id "general-dev" :label "general-dev"
+                        :status 'online :snapshot 'tree)
+                  "w3:p2")
+                 '(:machine (:id "general-dev" :label "general-dev"
+                             :status online)
+                   :pane "w3:p2"))))
+
+(defvar herdr-term--pane)
+(defvar herdr-term--connection)
+
+(ert-deftest herdr-machines-rows:marks-the-current-row-on-its-own-machine ()
+  "A pane identifier names a pane only on its own server.
+With a remote terminal on screen, the remote row is the current one,
+and the local row of the same identifier is not even open."
+  (herdr-session-with-snapshot
+      (list :agents (vector (list :pane_id "w3:p2" :agent_status "idle")))
+    (herdr-machines-tests-with-remote
+        (list :agents (vector (list :pane_id "w3:p2" :agent_status "idle")))
+      (let ((terminal (generate-new-buffer " *herdr-machines-terminal*")))
+        (unwind-protect
+            (save-window-excursion
+              (with-current-buffer terminal
+                (setq-local herdr-term--pane "w3:p2")
+                (setq-local herdr-term--connection '(:id "general-dev")))
+              (set-window-buffer (selected-window) terminal)
+              (should (equal
+                       (mapcar (lambda (row) (plist-get (cdr row) :emphasis))
+                               (herdr-machines-rows
+                                #'herdr-session-agents
+                                (lambda (node _current)
+                                  (list :status (herdr-session-status node)
+                                        :emphasis 'current
+                                        :label (gethash "pane_id" node)))))
+                       '(closed current))))
+          (kill-buffer terminal))))))
+
+(ert-deftest herdr-machines-visit:opens-a-remote-pane-through-its-connection ()
+  "A remote target reaches the shared opener with its machine's connection.
+A plist naming the local machine, which the every-pane prompt makes
+for local panes too, opens with no connection."
+  (let (opened)
+    (cl-letf (((symbol-function 'herdr-machines-connection)
+               (lambda (machine)
+                 (unless (equal (plist-get machine :id) "local")
+                   (list :id (plist-get machine :id)))))
+              ((symbol-function 'herdr-panel-open-pane)
+               (lambda (&rest arguments) (push arguments opened))))
+      (herdr-machines-visit '(:machine (:id "general-dev") :pane "w3:p2")
+                            'control)
+      (herdr-machines-visit '(:machine (:id "local") :pane "w1:p1") 'observe)
+      (herdr-machines-visit "w1:p2" 'observe)
+      (should (equal (nreverse opened)
+                     '(("w3:p2" control (:id "general-dev"))
+                       ("w1:p1" observe nil)
+                       ("w1:p2" observe)))))))
 
 (provide 'herdr-machines-tests)
 ;; Local Variables:

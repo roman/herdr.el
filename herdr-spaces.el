@@ -44,7 +44,6 @@
 (require 'herdr-machines)
 (require 'herdr-session)
 
-(declare-function herdr-ui-visit-pane "herdr-ui" (pane &optional other))
 (declare-function evil-define-key* "evil-core" (state keymap key def &rest bindings))
 
 ;;; Options
@@ -183,14 +182,10 @@ up to seconds of blocking per minute, so it is off by default."
 
 (defvar-keymap herdr-spaces-mode-map
   :doc "Keymap for `herdr-spaces-mode'."
-  :parent herdr-panel-mode-map
-  "RET" #'herdr-spaces-visit-at-point
-  "<mouse-1>" #'herdr-spaces-visit-click)
+  :parent herdr-panel-mode-map)
 
 (with-eval-after-load 'evil
-  (herdr-panel-install-evil-keys herdr-spaces-mode-map)
-  (evil-define-key* 'normal herdr-spaces-mode-map
-    (kbd "RET") #'herdr-spaces-visit-at-point))
+  (herdr-panel-install-evil-keys herdr-spaces-mode-map))
 
 ;;; Mode
 
@@ -198,7 +193,6 @@ up to seconds of blocking per minute, so it is off by default."
   "Major mode for the herdr spaces panel."
   :interactive nil
   (herdr-panel-init #'herdr-spaces-refresh #'herdr-spaces--pane-at-point)
-  (add-hook 'herdr-machines-change-hook #'herdr-spaces--refresh-existing)
   (herdr-machines-refresh)
   (setq herdr-spaces--machine-timer
         (run-at-time herdr-machines-probe-interval
@@ -219,18 +213,11 @@ up to seconds of blocking per minute, so it is off by default."
       (herdr-machines-refresh)
       (herdr-spaces-refresh))))
 
-(defun herdr-spaces--refresh-existing ()
-  "Refresh the spaces panel only when its buffer is still live."
-  (when-let* ((buffer (get-buffer herdr-spaces-buffer-name)))
-    (with-current-buffer buffer
-      (herdr-spaces-refresh))))
-
 (defun herdr-spaces--cancel-machine-timer ()
   "Cancel this spaces buffer's machine refresh timer."
   (when (timerp herdr-spaces--machine-timer)
     (cancel-timer herdr-spaces--machine-timer)
-    (setq herdr-spaces--machine-timer nil))
-  (remove-hook 'herdr-machines-change-hook #'herdr-spaces--refresh-existing))
+    (setq herdr-spaces--machine-timer nil)))
 
 (defun herdr-spaces--git-marks ()
   "Return the git state of every workspace, for the session fingerprint."
@@ -271,19 +258,6 @@ way round from `herdr-panel-visit-access', as pressing RET on the row
 would."
   (interactive (list (herdr-spaces--read) current-prefix-arg))
   (herdr-panel-open-pane pane (herdr-panel-access other)))
-
-(defun herdr-spaces-visit-at-point (&optional other)
-  "Visit the local or remote pane represented by the row at point.
-OTHER reverses the configured visit access."
-  (interactive "P")
-  (require 'herdr-ui)
-  (herdr-ui-visit-pane (herdr-spaces--pane-at-point) other))
-
-(defun herdr-spaces-visit-click (event)
-  "Visit the local or remote pane represented by the clicked EVENT."
-  (interactive "e")
-  (mouse-set-point event)
-  (herdr-spaces-visit-at-point current-prefix-arg))
 
 (defun herdr-spaces--read ()
   "Read a workspace with completion and return the pane to visit for it.
@@ -327,7 +301,7 @@ for a row already in the prompt."
          (herdr-panel-text "Spaces" 'herdr-spaces-title))
         (let* ((terminal (herdr-panel-current-terminal-buffer))
                (pane (and terminal (herdr-panel--buffer-pane terminal)))
-               (machine-id (herdr-spaces--buffer-machine-id terminal)))
+               (machine-id (herdr-machines-buffer-machine-id terminal)))
           (dolist (machine (herdr-machines-list))
             (herdr-spaces--insert-machine machine pane machine-id)))))
     (herdr-panel-settle-point)))
@@ -405,23 +379,9 @@ large repository and is rarely what the count is wanted for."
               (pane (herdr-session-pane pane-id)))
     (gethash "workspace_id" pane)))
 
-(defun herdr-spaces--buffer-machine-id (buffer)
-  "Return the machine of terminal BUFFER."
-  (let ((connection (and buffer
-                         (boundp 'herdr-term--connection)
-                         (buffer-local-value 'herdr-term--connection buffer))))
-    (or (plist-get connection :id) "local")))
-
 (defun herdr-spaces--pane-open-p (pane-id)
   "Return non-nil when a buffer mirrors PANE-ID on the rendered machine."
-  (and pane-id
-       (seq-some
-        (lambda (buffer)
-          (and (equal (herdr-panel--buffer-pane buffer) pane-id)
-               (equal (herdr-spaces--buffer-machine-id buffer)
-                      herdr-spaces--machine-id)))
-        (buffer-list))
-       t))
+  (herdr-machines-pane-open-p herdr-spaces--machine-id pane-id))
 
 (defun herdr-spaces--insert (space current pane &optional indent)
   "Insert SPACE, marking the workspace CURRENT wherever it appears.

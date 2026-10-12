@@ -40,6 +40,7 @@
 (require 'magit-section)
 (require 'seq)
 
+(require 'herdr-machines)
 (require 'herdr-panel)
 (require 'herdr-session)
 
@@ -141,19 +142,21 @@ form `herdr-ui-panels' names to put the panel in a column."
 ;;;###autoload
 (defun herdr-agents-visit (pane &optional other)
   "Show the terminal for the agent called PANE.
-PANE is read with completion over the agents herdr has detected, the
-ones wanting attention first, exactly as the panel lists them.  With a
-prefix argument OTHER, open it the other way round from
-`herdr-panel-visit-access', as pressing RET on the row would."
+PANE is read with completion over the agents herdr has detected on
+every machine, the ones wanting attention first, exactly as the panel
+lists them.  It is a pane, or for a remote machine what
+`herdr-machines-target' makes of one.  With a prefix argument OTHER,
+open it the other way round from `herdr-panel-visit-access', as
+pressing RET on the row would."
   (interactive (list (herdr-agents--read) current-prefix-arg))
-  (herdr-panel-open-pane pane (herdr-panel-access other)))
+  (herdr-machines-visit pane (herdr-panel-access other)))
 
 (defun herdr-agents--read ()
-  "Read an agent with completion and return its pane."
-  (herdr-panel-read-nodes "Agent: "
-                          #'herdr-agents--sorted
-                          #'herdr-agents--entry
-                          "Herdr has detected no agents"))
+  "Read an agent with completion and return its target."
+  (herdr-machines-read-nodes "Agent: "
+                             #'herdr-agents--sorted
+                             #'herdr-agents--entry
+                             "Herdr has detected no agents"))
 
 (defun herdr-agents-refresh ()
   "Redraw the agents panel from the session tree."
@@ -163,13 +166,10 @@ prefix argument OTHER, open it the other way round from
       (magit-insert-section (herdr-agents-root)
         (herdr-panel-insert-title
          "Agents" (and herdr-agents-border 'herdr-panel-border))
-        (let ((agents (herdr-agents--sorted))
-              (current (herdr-panel-current-pane)))
-          (if agents
-              (herdr-panel-insert-items
-               agents
-               (lambda (agent)
-                 (herdr-agents--insert agent current)))
+        (let ((rows (herdr-machines-rows #'herdr-agents--sorted
+                                         #'herdr-agents--entry)))
+          (if rows
+              (herdr-panel-insert-items rows #'herdr-agents--insert)
             (insert (propertize "  no agents detected\n"
                                 'face 'herdr-panel-unknown))))))
     (herdr-panel-settle-point)))
@@ -177,7 +177,7 @@ prefix argument OTHER, open it the other way round from
 ;;; Rendering
 
 (defun herdr-agents--sorted ()
-  "Return the agents to list, the ones wanting attention first.
+  "Return the agents to list from the current tree, attention first.
 Ties keep herdr's own order, so the list does not shuffle while
 several agents share a status.  Kinds in `herdr-agents-hidden-kinds'
 are left out."
@@ -201,10 +201,10 @@ on that and leaves the workspace to the Spaces panel."
         :id (gethash "pane_id" agent)
         :label (herdr-agents--name agent)))
 
-(defun herdr-agents--insert (agent current)
-  "Insert an entry for AGENT, emphasised against the CURRENT pane."
-  (magit-insert-section (herdr-agent (gethash "pane_id" agent))
-    (herdr-panel-insert-entry (herdr-agents--entry agent current))))
+(defun herdr-agents--insert (row)
+  "Insert ROW, a (TARGET . ENTRY) pair from `herdr-machines-rows'."
+  (magit-insert-section (herdr-agent (car row))
+    (herdr-panel-insert-entry (cdr row))))
 
 (defun herdr-agents--name (agent)
   "Return AGENT's glyph and the title of what it is working on.
