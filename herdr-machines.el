@@ -217,6 +217,11 @@
             :name (format "herdr-machine-%s" id)
             :buffer buffer
             :stderr stderr-buffer
+            ;; With ControlMaster auto, this SSH can become the connection
+            ;; master that later probes reuse.  ControlPersist keeps that
+            ;; master after the probe exits, but a pty's hangup kills it,
+            ;; and each probe then has to authenticate from scratch.
+            :connection-type 'pipe
             :command (list herdr-machines-ssh-executable
                            "-o" "BatchMode=yes"
                            "-o" "ConnectTimeout=5"
@@ -520,6 +525,8 @@ online, as `herdr-machines-rows' lists them, and the answer is what
             (make-process
              :name (format "herdr-tunnel-%s" id)
              :buffer nil
+             ;; A tunnel needs no terminal.
+             :connection-type 'pipe
              :command
              (list herdr-machines-ssh-executable "-N" "-o" "BatchMode=yes"
                    "-o" "ExitOnForwardFailure=yes"

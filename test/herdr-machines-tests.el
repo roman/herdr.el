@@ -225,6 +225,46 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(defun herdr-machines-tests--connection-types (thunk)
+  "Call THUNK and return the connection type of each process it made."
+  (let ((types nil)
+        (make-process-function (symbol-function 'make-process)))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest args)
+                 (push (plist-get args :connection-type) types)
+                 (apply make-process-function
+                        (plist-put (copy-sequence args) :command
+                                   '("sh" "-c" "exec sleep 60"))))))
+      (funcall thunk))
+    types))
+
+(ert-deftest herdr-machines--start-probe:runs-ssh-without-a-terminal ()
+  "A probe's ControlPersist master outlives the probe only on a pipe."
+  (let* ((herdr-machines--statuses (make-hash-table :test #'equal))
+         (herdr-machines--snapshots (make-hash-table :test #'equal))
+         (process nil)
+         (types (herdr-machines-tests--connection-types
+                 (lambda ()
+                   (setq process (herdr-machines--start-probe
+                                  (herdr-machines-tests--profile t)))))))
+    (unwind-protect
+        (should (equal types '(pipe)))
+      (cancel-timer (process-get process 'herdr-machine-timeout))
+      (delete-process process)
+      (herdr-machines--kill-probe-buffers process))))
+
+(ert-deftest herdr-machines--ensure-tunnel:runs-ssh-without-a-terminal ()
+  "A tunnel's SSH runs on a pipe."
+  (let ((herdr-machines--server-sockets (make-hash-table :test #'equal)))
+    (puthash "machine" "/run/herdr.sock" herdr-machines--server-sockets)
+    (should (eq (catch 'connection-type
+                  (cl-letf (((symbol-function 'make-process)
+                             (lambda (&rest args)
+                               (throw 'connection-type
+                                      (plist-get args :connection-type)))))
+                    (herdr-machines--ensure-tunnel "machine" "baker")))
+                'pipe))))
+
 (ert-deftest herdr-machines--remote-command:finds-profile-installed-herdr ()
   "The remote command checks profile paths before it reports an error."
   (let ((command (herdr-machines--remote-command "work session")))
