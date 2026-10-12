@@ -748,17 +748,122 @@ makes long after the last herdr buffer is gone."
 
 ;;; Scrolling
 
+(defmacro herdr-term-with-test-agent (kind &rest body)
+  "Evaluate BODY with the current pane running an agent of KIND."
+  (declare (indent 1) (debug t))
+  `(let ((herdr-session--snapshot
+          (json-parse-string
+           (json-serialize
+            (list :agents (vector (list :pane_id "w1:p1"
+                                        :agent ,kind)))))))
+     ,@body))
+
+(ert-deftest herdr-term-scroll:codex-pages-and-anchors-point ()
+  "Codex reads PageUp and PageDown; point follows the new page."
+  (herdr-term-with-test-agent "codex"
+    (herdr-term-with-test-buffer
+      (setq herdr-term--writable t)
+      (let ((inhibit-read-only t))
+        (insert "one\ntwo\nthree"))
+      (goto-char (point-min))
+      (herdr-term-scroll-up)
+      (should (eql (line-number-at-pos) 3))
+      (let ((command (json-parse-string
+                      (string-trim-right (car herdr-term-test-sent)))))
+        (should (equal (gethash "source" command) "page_key")))
+      (let ((this-command 'herdr-term-line-up))
+        (run-hooks 'pre-command-hook))
+      (herdr-term-line-up)
+      (cl-letf (((symbol-function 'ghostel--redraw-now)
+                 (lambda (&rest _) (goto-char (point-min)))))
+        (herdr-term-test-apply
+         (herdr-term-test-frame 1 t "queued output"))
+        (herdr-term-test-apply
+         (herdr-term-test-frame 2 nil "older page")))
+      (should (eql (line-number-at-pos) 2))
+      (let ((this-command 'herdr-term-line-up))
+        (run-hooks 'pre-command-hook))
+      (herdr-term-line-up)
+      (should (eql (line-number-at-pos) 1))
+      (goto-char (point-max))
+      (herdr-term-line-down)
+      (let ((this-command 'herdr-term-line-down))
+        (run-hooks 'pre-command-hook))
+      (herdr-term-line-down)
+      (cl-letf (((symbol-function 'ghostel--redraw-now)
+                 (lambda (&rest _) (goto-char (point-max)))))
+        (herdr-term-test-apply
+         (herdr-term-test-frame 3 nil "later page")))
+      (should (eql (line-number-at-pos) 2))
+      (let ((command (json-parse-string
+                      (string-trim-right (car herdr-term-test-sent)))))
+        (should (equal (gethash "direction" command) "down"))
+        (should (equal (gethash "source" command) "page_key")))
+      (let ((this-command 'herdr-term-line-down))
+        (run-hooks 'pre-command-hook))
+      (herdr-term-line-down)
+      (should (eql (line-number-at-pos) 3)))))
+
+(ert-deftest herdr-term-line-up:codex-repeats-at-the-first-row ()
+  "A first-row point sends PageUp even when it is past column zero."
+  (herdr-term-with-test-agent "codex"
+    (herdr-term-with-test-buffer
+      (setq herdr-term--writable t)
+      (let ((inhibit-read-only t))
+        (insert "one\ntwo\nthree"))
+      (goto-char 2)
+      (herdr-term-line-up)
+      (should (eql (line-number-at-pos) 3))
+      (should (= (length herdr-term-test-sent) 1)))))
+
+(ert-deftest herdr-term-scroll:codex-skips-the-empty-grid-tail ()
+  "PageUp lands on the last grid row, before a final newline."
+  (herdr-term-with-test-agent "codex"
+    (herdr-term-with-test-buffer
+      (setq herdr-term--writable t)
+      (let ((inhibit-read-only t))
+        (insert "one\ntwo\nthree\n"))
+      (goto-char (point-min))
+      (herdr-term-scroll-up)
+      (should (eql (line-number-at-pos) 3))
+      (herdr-term-line-up)
+      (should (eql (line-number-at-pos) 2)))))
+
+(ert-deftest herdr-term-scroll:remote-codex-uses-its-own-tree ()
+  "A remote pane uses the latest cached session snapshot."
+  (herdr-term-with-test-agent "claude"
+    (herdr-term-with-test-buffer
+      (let ((snapshot nil))
+        (setq herdr-term--writable t
+              herdr-term--connection
+              (list :snapshot-function (lambda () snapshot)))
+        (herdr-term-scroll-up)
+        (should (equal
+                 (gethash "source" (json-parse-string
+                                    (car herdr-term-test-sent)))
+                 "wheel"))
+        (setq snapshot
+              (json-parse-string
+               "{\"agents\":[{\"pane_id\":\"w1:p1\",\"agent\":\"codex\"}]}"))
+        (herdr-term-scroll-up)
+        (should (equal
+                 (gethash "source" (json-parse-string
+                                    (car herdr-term-test-sent)))
+                 "page_key"))))))
+
 (ert-deftest herdr-term-scroll:sends-a-wheel-scroll ()
   "A scroll travels as `terminal.scroll', not as injected page keys."
-  (herdr-term-with-test-buffer
-    (setq herdr-term--writable t)
-    (herdr-term-scroll-up)
-    (let ((command (json-parse-string
-                    (string-trim-right (car herdr-term-test-sent)))))
-      (should (equal (gethash "type" command) "terminal.scroll"))
-      (should (equal (gethash "direction" command) "up"))
-      (should (equal (gethash "source" command) "wheel"))
-      (should (eql (gethash "lines" command) herdr-term-scroll-lines)))))
+  (herdr-term-with-test-agent "claude"
+    (herdr-term-with-test-buffer
+      (setq herdr-term--writable t)
+      (herdr-term-scroll-up)
+      (let ((command (json-parse-string
+                      (string-trim-right (car herdr-term-test-sent)))))
+        (should (equal (gethash "type" command) "terminal.scroll"))
+        (should (equal (gethash "direction" command) "up"))
+        (should (equal (gethash "source" command) "wheel"))
+        (should (eql (gethash "lines" command)
+                     herdr-term-scroll-lines))))))
 
 (ert-deftest herdr-term-scroll:pages-by-a-screenful ()
   "A page keeps two rows, so consecutive pages overlap."

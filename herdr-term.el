@@ -191,6 +191,9 @@ which makes it the record of whether that connection ever synced.")
 (defvar-local herdr-term--connection nil
   "Remote server connection for this pane, or nil for the local server.")
 
+(defvar-local herdr-term--scroll-anchor nil
+  "Row to keep selected while a Codex page repaints, or nil.")
+
 ;;; Keymaps
 
 ;; The shifted page keys are what a terminal emulator conventionally uses
@@ -485,13 +488,13 @@ pane herdr has since made again under the same id — can be retried."
 
 (defun herdr-term-scroll-up ()
   "Scroll this pane back through its history by one wheel notch.
-The distance is `herdr-term-scroll-lines'."
+The distance is `herdr-term-scroll-lines'.  Codex moves one page."
   (interactive)
   (herdr-term--scroll "up" herdr-term-scroll-lines))
 
 (defun herdr-term-scroll-down ()
   "Scroll this pane forward through its history by one wheel notch.
-The distance is `herdr-term-scroll-lines'."
+The distance is `herdr-term-scroll-lines'.  Codex moves one page."
   (interactive)
   (herdr-term--scroll "down" herdr-term-scroll-lines))
 
@@ -518,23 +521,30 @@ The distance is `herdr-term-scroll-lines'."
 (defun herdr-term-line-up ()
   "Move up a line, scrolling the pane once the first one is reached.
 The buffer only ever holds the pane's viewport, so there is no earlier
-line to move onto; the pane has to bring one down instead."
+line to move onto; the pane has to bring one down instead.  Codex moves
+one page at that edge."
   (interactive)
-  (if (bobp)
+  (if (= (line-beginning-position) (point-min))
       (herdr-term--scroll "up" 1)
-    (forward-line -1)))
+    (forward-line -1))
+  (when herdr-term--scroll-anchor
+    (setq herdr-term--scroll-anchor (line-number-at-pos))))
 
 (defun herdr-term-line-down ()
   "Move down a line, scrolling the pane once the last one is reached.
 The buffer only ever holds the pane's viewport, so there is no later
-line to move onto; the pane has to bring one up instead."
+line to move onto; the pane has to bring one up instead.  Codex moves
+one page at that edge."
   (interactive)
   (if (save-excursion (end-of-line) (eobp))
       (herdr-term--scroll "down" 1)
-    (forward-line 1)))
+    (forward-line 1))
+  (when herdr-term--scroll-anchor
+    (setq herdr-term--scroll-anchor (line-number-at-pos))))
 
 (defun herdr-term-scroll-to-top ()
-  "Show the start of this pane's history."
+  "Show the start of this pane's history.
+Codex accepts only a page key, so it moves one page instead."
   (interactive)
   (herdr-term--scroll "up" herdr-term--scroll-limit))
 
@@ -552,7 +562,8 @@ client at a time, so this takes control from whoever holds it."
 (defun herdr-term-scroll-to-bottom ()
   "Return this pane to the end of its history.
 The distance asked for is deliberately larger than any scrollback, and
-herdr clamps it, which saves asking the server where the bottom is."
+herdr clamps it, which saves asking the server where the bottom is.
+Codex accepts only a page key, so it moves one page instead."
   (interactive)
   (herdr-term--scroll "down" herdr-term--scroll-limit))
 
@@ -662,6 +673,7 @@ herdr's authoritative ones."
 
 (defun herdr-term--teardown ()
   "Stop this buffer's stream, input bridge and pending reconnect."
+  (herdr-term--clear-scroll-anchor)
   (herdr-term--kill-process)
   (herdr-term--cancel-reconnect)
   (herdr-term--cancel-resize)
@@ -674,6 +686,7 @@ herdr's authoritative ones."
 Return the new process.  A fresh connect always begins with a full
 frame, so this doubles as the only resync the protocol offers."
   (with-current-buffer buffer
+    (herdr-term--clear-scroll-anchor)
     (herdr-term--kill-process)
     (herdr-term--cancel-reconnect)
     (setq herdr-term--last-seq nil
@@ -1015,9 +1028,63 @@ The repaint is forced because herdr wraps frames in synchronized output
 \(mode 2026), under which a deferred redraw would leave the buffer one
 frame behind."
   (ghostel--write-vt ghostel--term bytes)
-  (ghostel--redraw-now (current-buffer) t))
+  (ghostel--redraw-now (current-buffer) t)
+  (when herdr-term--scroll-anchor
+    (herdr-term--place-row herdr-term--scroll-anchor)))
 
 ;;; Scrolling
+
+(defun herdr-term--clear-scroll-anchor ()
+  "Stop anchoring the Codex page after a command or stream reset."
+  (setq herdr-term--scroll-anchor nil)
+  (remove-hook 'pre-command-hook
+               #'herdr-term--maybe-clear-scroll-anchor t))
+
+(defun herdr-term--maybe-clear-scroll-anchor ()
+  "Clear the Codex anchor before commands other than row motions."
+  (unless (memq this-command
+                '(herdr-term-line-up herdr-term-line-down))
+    (herdr-term--clear-scroll-anchor)))
+
+(defun herdr-term--place-point (position)
+  "Place point at POSITION in this buffer and its displayed windows."
+  (goto-char position)
+  (dolist (window (get-buffer-window-list (current-buffer) nil t))
+    (set-window-point window position)))
+
+(defun herdr-term--place-row (row)
+  "Place point on ROW of this buffer and its displayed windows."
+  (herdr-term--place-point
+   (save-excursion
+     (goto-char (point-min))
+     (forward-line (1- row))
+     (point))))
+
+(defun herdr-term--last-row-point ()
+  "Return the last usable grid row, before any final empty line."
+  (save-excursion
+    (goto-char (point-max))
+    (when (and (bolp) (> (point) (point-min)))
+      (forward-line -1))
+    (point)))
+
+(defun herdr-term--codex-p ()
+  "Return non-nil when this buffer mirrors a Codex pane.
+Read the live local session tree so an agent started after the buffer
+opened is detected.  Remote connections read the latest cached tree,
+which avoids a synchronous API call on each scroll."
+  (let* ((snapshot-function
+          (plist-get herdr-term--connection :snapshot-function))
+         (snapshot (and snapshot-function
+                        (funcall snapshot-function)))
+         (agent (if herdr-term--connection
+                    (seq-find
+                     (lambda (item)
+                       (equal (gethash "pane_id" item)
+                              herdr-term--pane))
+                     (and snapshot (gethash "agents" snapshot)))
+                  (herdr-session-agent herdr-term--pane))))
+    (equal (and agent (gethash "agent" agent)) "codex")))
 
 (defun herdr-term--page-lines ()
   "Return how many lines make a screenful of this pane.
@@ -1028,6 +1095,8 @@ which is what makes a long read followable."
 (defun herdr-term--scroll (direction lines)
   "Scroll this buffer's pane LINES lines in DIRECTION.
 DIRECTION is the string \"up\" or \"down\".
+Codex receives one page key regardless of LINES.  Point moves to the
+opposite edge so the next line motion can continue through the page.
 
 Where the pane is scrolled to is a property of the pane and not of this
 buffer, so the herdr TUI and every other client showing it scroll too.
@@ -1041,15 +1110,21 @@ and only one client at a time holds control of a pane."
   (unless (process-live-p herdr-term--process)
     (user-error "No live stream for %s" herdr-term--pane))
   (when (> lines 0)
-    (herdr-term--send-command
-     (list :type "terminal.scroll"
-           :direction direction
-           :lines (min lines herdr-term--scroll-limit)
-           ;; `wheel' moves the pane's viewport over its scrollback.
-           ;; `page_key' would instead deliver PageUp or PageDown to the
-           ;; program as input, which the input bridge already does for
-           ;; the unshifted keys.
-           :source "wheel"))))
+    (let ((codex (herdr-term--codex-p)))
+      (herdr-term--send-command
+       (list :type "terminal.scroll"
+             :direction direction
+             :lines (min lines herdr-term--scroll-limit)
+             ;; Codex owns its scrollback and only accepts page keys.
+             :source (if codex "page_key" "wheel")))
+      (when codex
+        (herdr-term--place-point
+         (if (equal direction "up")
+             (herdr-term--last-row-point)
+           (point-min)))
+        (setq herdr-term--scroll-anchor (line-number-at-pos))
+        (add-hook 'pre-command-hook
+                  #'herdr-term--maybe-clear-scroll-anchor nil t)))))
 
 ;;; Fitting the Pane to its Window
 

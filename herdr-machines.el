@@ -504,6 +504,8 @@ online, as `herdr-machines-rows' lists them, and the answer is what
         (list :id id
               :label (plist-get machine :label)
               :socket socket
+              :snapshot-function
+              (lambda () (gethash id herdr-machines--snapshots))
               :stream-command
               (list herdr-machines-ssh-executable "-o" "BatchMode=yes"
                     target

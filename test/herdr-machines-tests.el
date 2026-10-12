@@ -342,6 +342,29 @@ is replaced on every probe would make the row a new one each time."
                              :status online)
                    :pane "w3:p2"))))
 
+(ert-deftest herdr-machines-connection:passes-the-remote-tree ()
+  "A terminal connection carries the remote agent type for scrolling."
+  (let* ((profile (herdr-machines-tests--profile t))
+         (id (gethash "id" profile))
+         (herdr-machines--profiles (list profile))
+         (herdr-machines--snapshots (make-hash-table :test #'equal))
+         (herdr-machines--remote-executables
+          (make-hash-table :test #'equal))
+         (snapshot (json-parse-string
+                    "{\"agents\":[{\"pane_id\":\"w1:p1\",\"agent\":\"codex\"}]}")))
+    (puthash id snapshot herdr-machines--snapshots)
+    (puthash id "herdr" herdr-machines--remote-executables)
+    (cl-letf (((symbol-function 'herdr-machines--ensure-tunnel)
+               (lambda (&rest _) "/tmp/herdr-test.sock")))
+      (let* ((connection
+              (herdr-machines-connection
+               (list :id id :label "Baker" :status 'online)))
+             (snapshot-function
+              (plist-get connection :snapshot-function)))
+        (should (eq (funcall snapshot-function) snapshot))
+        (remhash id herdr-machines--snapshots)
+        (should-not (funcall snapshot-function))))))
+
 (defvar herdr-term--pane)
 (defvar herdr-term--connection)
 
