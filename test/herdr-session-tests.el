@@ -319,6 +319,19 @@ to the same thing."
                            "fix agent rows"))))
       (delete-file file))))
 
+(ert-deftest herdr-session-agent-title:prefers-a-reported-title ()
+  "A reported title wins over the agent's identity name."
+  (dolist (title '("zoo.nix/agent-sandbox-config" "" nil 42))
+    (let ((agent (json-parse-string
+                  (json-serialize
+                   (list :pane_id "w1:p1" :name "c-generation"
+                         :title title :agent "codex"
+                         :terminal_title_stripped "project")))))
+      (should (equal (herdr-session-agent-title agent)
+                     (if (equal title "zoo.nix/agent-sandbox-config")
+                         title
+                       "c-generation"))))))
+
 (ert-deftest herdr-session-agent-title:prefers-a-herdr-name ()
   "An explicit herdr name wins over an agent-specific title."
   (let ((herdr-session-codex-index-file nil)
@@ -363,6 +376,57 @@ to the same thing."
     (should (null (herdr-session-protocol)))))
 
 ;;; Refreshing
+
+(ert-deftest herdr-session-start:polls-reported-title-changes ()
+  "Polling must redraw panels when only the reported title changes."
+  (let* ((herdr-session--snapshot nil)
+         (herdr-session--fingerprint nil)
+         (herdr-session--subscription nil)
+         (herdr-session--timer nil)
+         (herdr-session--poll-timer nil)
+         (herdr-session--refresh-process nil)
+         (herdr-session--refresh-pending nil)
+         (herdr-session--refresh-generation 0)
+         (herdr-session-poll-interval 0.01)
+         (announcements 0)
+         (herdr-session-change-hook
+          (list (lambda () (cl-incf announcements))))
+         (title "first task")
+         receive)
+    (cl-labels ((response ()
+                 (json-parse-string
+                  (json-serialize
+                   (list :snapshot
+                         (list :agents
+                               (vector
+                                (list :pane_id "w1:p1" :agent "codex"
+                                      :name "c-generation"
+                                      :title title))))))))
+      (cl-letf (((symbol-function 'herdr-api-request)
+                 (lambda (&rest _) (response)))
+                ((symbol-function 'herdr-api-subscribe)
+                 (lambda (&rest _) nil))
+                ((symbol-function 'herdr-api-request-async)
+                 (lambda (_method _params on-success _on-error)
+                   (setq receive on-success)
+                   'request)))
+        (unwind-protect
+            (progn
+              (herdr-session-start)
+              (should (= announcements 1))
+              (setq title "second task")
+              (dotimes (_ 20)
+                (unless receive (accept-process-output nil 0.01)))
+              (should receive)
+              (funcall receive (response) 'request)
+              (should (= announcements 2))
+              (should (equal
+                       (herdr-session-agent-title
+                        (herdr-session-agent "w1:p1"))
+                       "second task"))
+              (herdr-session-refresh)
+              (should (= announcements 2)))
+          (herdr-session-stop))))))
 
 (ert-deftest herdr-session--note-event:defers-and-coalesces ()
   "A burst of events costs one refresh, and none from the filter.

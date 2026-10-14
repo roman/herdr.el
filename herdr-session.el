@@ -69,6 +69,8 @@ otherwise cost a snapshot."
 
 (defcustom herdr-session-poll-interval 5
   "Seconds between snapshots taken without an event asking for one.
+Reported pane titles emit only a per-pane status event.  Polling
+updates these titles without a separate subscription for every pane.
 Some of what the panels show changes with no event to announce it.  A
 workspace label is derived from the working directory of its root
 pane, and a shell changing directory reports nothing at all: herdr
@@ -106,8 +108,9 @@ the lookup.  Changes are noticed by the ordinary session poll."
     "pane.agent_detected")
   "Events that make the session tree stale.
 `pane.agent_status_changed' is deliberately absent: it is subscribed
-per pane, while `pane.updated' reports the same change for every pane
-at once."
+per pane.  Status changes also reach the tree through other events.
+Presentation-only changes, such as reported titles, are picked up by
+`herdr-session-poll-interval'."
   :package-version '(herdr . "0.1.0")
   :group 'herdr-session
   :type '(repeat string))
@@ -382,12 +385,16 @@ callbacks consume the event loop."
 
 (defun herdr-session-agent-title (agent)
   "Return the user-facing title of AGENT, or nil.
-A name assigned through herdr wins.  Codex names are joined from its
-local session index because its terminal title only reports the
-project.  Other agents use their stripped terminal title."
+A reported title wins, followed by a name assigned through herdr,
+the Codex session title, and the stripped terminal title.  Codex
+session titles are joined from its local session index."
   (let ((pane (gethash "pane_id" agent))
-        (name (gethash "name" agent)))
-    (or (and (stringp name)
+        (name (gethash "name" agent))
+        (title (gethash "title" agent)))
+    (or (and (stringp title)
+             (not (string-empty-p title))
+             title)
+        (and (stringp name)
              (not (string-empty-p name))
              (not (equal name pane))
              name)
