@@ -51,6 +51,7 @@
 (require 'subr-x)
 
 (require 'herdr-api)
+(require 'herdr-notifications)
 
 ;;; Options
 
@@ -177,7 +178,8 @@ after the server was restarted."
     (setq herdr-session--subscription
           (herdr-api-subscribe herdr-session-events
                                #'herdr-session--note-event
-                               #'herdr-session--note-closed)))
+                               #'herdr-session--note-closed))
+    (herdr-notifications-start))
   (when herdr-session-poll-interval
     (setq herdr-session--poll-timer
           (run-at-time herdr-session-poll-interval
@@ -195,6 +197,7 @@ after the server was restarted."
   (setq herdr-session--timer nil
         herdr-session--poll-timer nil)
   (herdr-session--cancel-refresh)
+  (herdr-notifications-stop)
   (herdr-api-unsubscribe herdr-session--subscription)
   (setq herdr-session--subscription nil))
 

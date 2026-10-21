@@ -321,6 +321,13 @@ drops the sound that says the work is done."
 
 ;;; Playing
 
+(defun herdr-sound-play (sound)
+  "Play a custom notification SOUND when sound is enabled.
+SOUND is `request' or `done'.  Custom notifications have no pane or
+agent identity, so agent status filters do not apply."
+  (when herdr-sound-enabled
+    (herdr-sound--play sound)))
+
 (defun herdr-sound--play (sound)
   "Play SOUND, which is `request' or `done'.
 The player runs detached and its output is dropped, so a sound that

@@ -229,6 +229,31 @@ list, which leaves out bare `aplay` because it does not decode mp3 and would
 play the bytes as raw noise. `herdr-sound-agents` silences one kind of agent,
 as herdr's per-agent table does, and ships `droid` off for the same reason.
 
+### Custom notifications
+
+While the session is running, Emacs subscribes to custom notifications
+sent with `herdr notification show`. This requires a Herdr server with
+the `notification.shown` API event. Older servers reject the separate
+subscription. Emacs logs that rejection once in `*Messages*` and keeps
+the session tree running.
+
+`herdr-notifications-enabled` defaults to `t`. Set it to `nil` to stop
+delivery. After enabling it again, run `M-x herdr-session-start` to
+subscribe. `herdr-notifications-backend` defaults to `auto`: Emacs uses
+`notifications-notify` with a D-Bus notification server and falls back
+to `message`. Choose `message` for echo area delivery or `notifications`
+to request desktop delivery with the same fallback.
+
+A custom `request` or `done` sound uses the files and player settings in
+`herdr-sound`. `herdr-sound-enabled` also controls these sounds. Custom
+notifications do not require `herdr-sound-mode`. Agent status sounds
+remain under that mode. Desktop notifications suppress their own sound.
+
+Reconnecting to the same socket keeps the highest notification sequence
+to drop duplicates. Recreating the socket resets this watermark for a
+restarted server. The event's position describes Herdr's toast placement;
+the desktop notification server controls desktop placement.
+
 ### (3) The column is a list of panels
 
 `herdr-ui-panels` is an alist of `(FUNCTION . WEIGHT)`, top to bottom. The
