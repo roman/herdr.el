@@ -242,6 +242,29 @@ it is supposed to kill."
       (kill-buffer buffer)
       (delete-directory directory))))
 
+(ert-deftest herdr-term--setup:keeps-the-mirror-live-when-point-leaves ()
+  "Point leaving the cursor does not freeze the mirror in copy mode.
+A minibuffer closing over a terminal is enough to set that off."
+  (let ((buffer (generate-new-buffer " *herdr-setup-point-leave-test*")))
+    (unwind-protect
+        (let ((herdr-session--snapshot
+               (json-parse-string
+                (json-serialize (list :panes (vector))))))
+          (cl-letf (((symbol-function 'herdr-term--teardown) #'ignore)
+                    ((symbol-function 'ghostel-mode) #'ignore)
+                    ((symbol-function 'pop-to-buffer) #'ignore)
+                    ((symbol-function 'get-buffer-window) #'ignore)
+                    ((symbol-function 'herdr-term--reset-term) #'ignore)
+                    ((symbol-function 'herdr-term-command-mode) #'ignore)
+                    ((symbol-function 'herdr-term--start-stream) #'ignore))
+            (herdr-term--setup buffer "w1:p1" nil))
+          (with-current-buffer buffer
+            (should (local-variable-p 'ghostel-point-leave-input-mode))
+            (should-not ghostel-point-leave-input-mode)))
+      (with-current-buffer buffer
+        (remove-hook 'kill-buffer-hook #'herdr-term--teardown t))
+      (kill-buffer buffer))))
+
 ;;; Stream Framing
 
 (ert-deftest herdr-term--filter:buffers-partial-line ()

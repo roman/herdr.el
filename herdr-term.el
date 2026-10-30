@@ -665,6 +665,13 @@ herdr's authoritative ones."
       (unless connection
         (herdr-term--update-directory buffer pane))
       (herdr-term--reset-term rows cols)
+      ;; Ghostel freezes a terminal in copy mode once point leaves its
+      ;; cursor, and checks that whenever a minibuffer closes over one.
+      ;; In normal state point sits anywhere in a mirror, so picking from
+      ;; any prompt froze whichever terminal was selected, without a
+      ;; sign beyond a message in the echo area.  Copy mode stays one
+      ;; command away for anyone who wants it.
+      (setq-local ghostel-point-leave-input-mode nil)
       (herdr-term-command-mode 1)
       (add-hook 'window-size-change-functions #'herdr-term--note-resize nil t)
       (add-hook 'kill-buffer-hook #'herdr-term--teardown nil t)
