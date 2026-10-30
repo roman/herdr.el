@@ -122,9 +122,7 @@ rule they read as one list under several headings."
 ;;; Faces
 
 (defface herdr-review-icon
-  '((((background dark)) :foreground "#7aa2f7")
-    (((background light)) :foreground "#2f5fbf")
-    (t :inherit font-lock-keyword-face))
+  '((t :inherit font-lock-function-name-face))
   "Face for the mark beside a review."
   :group 'herdr-review)
 

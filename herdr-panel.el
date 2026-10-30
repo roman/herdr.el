@@ -39,6 +39,7 @@
 
 ;;; Code:
 
+(require 'hl-line)
 (require 'magit-section)
 (require 'seq)
 
@@ -51,68 +52,54 @@
   :group 'herdr-session
   :prefix "herdr-panel-")
 
-;; The colours are herdr's own, so that a pane looks the same whichever
-;; client is showing it.  They are the Catppuccin flavours herdr ships:
-;; Mocha where Emacs reports a dark background, Latte where it reports a
-;; light one.  Everything here is a face, so a theme that disagrees can
-;; say so without patching the panels.
+;; The colours come from the theme.  Each face that colours text inherits
+;; the standard face nearest its meaning: `error' for an agent waiting on
+;; you, `warning' for one at work, `success' for one at rest, and the
+;; `font-lock' faces for the fields of an entry.  The panels then sit in
+;; whatever palette the rest of the frame uses, and a theme that wants
+;; something particular can still set any of these faces directly.
 
-;; The four status marks depart from Mocha, and only on a dark background.
-;; Mocha's are pastels: light and barely saturated, which is what they are
-;; for behind a wall of code.  A mark is one glyph wide, three of the
-;; statuses draw the same glyph, and colour is the whole of what tells them
-;; apart — and against a black background the pastels lose the little
-;; saturation they had and read as three shades of pale.  So each mark
-;; keeps Mocha's hue and takes as much of it as the terminal will give.
-;; Every field that is text rather than a mark stays pastel, which leaves
-;; the marks the loudest thing in the column: they are what a reader scans.
+;; The four status marks need four colours a glance can tell apart: a mark
+;; is one glyph wide and three of the statuses draw the same glyph.  So
+;; `herdr-panel-done' takes `font-lock-builtin-face' rather than sharing
+;; `success' with `herdr-panel-idle'.
+
+;; Only the row fills keep colours of their own, because no standard face
+;; is a background meant to sit behind coloured text.  See
+;; `herdr-panel-attention-blocked'.
 
 (defface herdr-panel-blocked
-  '((((background dark)) :foreground "#ff3b47")
-    (((background light)) :foreground "#d20f39")
-    (t :inherit error))
+  '((t :inherit error))
   "Face for the mark of an agent waiting on the user."
   :group 'herdr-panel)
 
 (defface herdr-panel-working
-  '((((background dark)) :foreground "#ffcc00")
-    (((background light)) :foreground "#df8e1d")
-    (t :inherit warning))
+  '((t :inherit warning))
   "Face for the mark of an agent that is working."
   :group 'herdr-panel)
 
 (defface herdr-panel-done
-  '((((background dark)) :foreground "#00e5c0")
-    (((background light)) :foreground "#179299")
-    (t :inherit success))
+  '((t :inherit font-lock-builtin-face))
   "Face for the mark of an agent whose finished work nobody has seen."
   :group 'herdr-panel)
 
 (defface herdr-panel-idle
-  '((((background dark)) :foreground "#2fe86b")
-    (((background light)) :foreground "#40a043")
-    (t :inherit success))
+  '((t :inherit success))
   "Face for the mark of an agent with nothing to report."
   :group 'herdr-panel)
 
 (defface herdr-panel-unknown
-  '((((background dark)) :foreground "#6c7086")
-    (((background light)) :foreground "#9ca0b0")
-    (t :inherit shadow))
+  '((t :inherit shadow))
   "Face for the mark of a pane herdr has detected no agent in."
   :group 'herdr-panel)
 
 (defface herdr-panel-connecting
-  '((((background dark)) :foreground "#ffcc00")
-    (((background light)) :foreground "#df8e1d")
-    (t :inherit warning))
+  '((t :inherit warning))
   "Face for a machine while its connection starts."
   :group 'herdr-panel)
 
 (defface herdr-panel-online
-  '((((background dark)) :foreground "#2fe86b")
-    (((background light)) :foreground "#40a043")
-    (t :inherit success))
+  '((t :inherit success))
   "Face for a connected machine."
   :group 'herdr-panel)
 
@@ -132,16 +119,12 @@
   :group 'herdr-panel)
 
 (defface herdr-panel-label
-  '((((background dark)) :foreground "#a6adc8")
-    (((background light)) :foreground "#6c6f85")
-    (t :inherit default))
+  '((t))
   "Face for the name on a row that is not the current one."
   :group 'herdr-panel)
 
 (defface herdr-panel-unopened
-  '((((background dark)) :foreground "#6c7086")
-    (((background light)) :foreground "#9ca0b0")
-    (t :inherit shadow))
+  '((t :inherit shadow))
   "Face for the name of a pane no Emacs buffer is mirroring.
 Dimmer than `herdr-panel-label', so that a glance separates what is
 open here from what is merely running over there."
@@ -158,55 +141,40 @@ open here from what is merely running over there."
 ;; the whole thing recedes.
 
 (defface herdr-panel-path
-  '((((background dark)) :foreground "#f9e2af")
-    (((background light)) :foreground "#df8e1d")
-    (t :inherit font-lock-string-face))
+  '((t :inherit font-lock-string-face))
   "Face for the directory a workspace sits in.
-The yellow a folder is drawn in, chosen because a path has to be told
-apart from a dimmed entry at a glance, and any grey quiet enough to
-sit behind the name was too near the grey that means \"not open\"."
+A string colour rather than a grey, because a path has to be told apart
+from a dimmed entry at a glance, and any grey quiet enough to sit
+behind the name was too near the grey that means \"not open\"."
   :group 'herdr-panel)
 
 (defface herdr-panel-branch
-  '((((background dark)) :foreground "#cba6f7")
-    (((background light)) :foreground "#8839ef")
-    (t :inherit font-lock-keyword-face))
-  "Face for a git branch.  This is the colour herdr gives one."
+  '((t :inherit font-lock-keyword-face))
+  "Face for a git branch."
   :group 'herdr-panel)
 
 (defface herdr-panel-ahead
-  '((((background dark)) :foreground "#a6e3a1")
-    (((background light)) :foreground "#40a043")
-    (t :inherit success))
+  '((t :inherit success))
   "Face for how far a checkout is ahead of its upstream."
   :group 'herdr-panel)
 
 (defface herdr-panel-behind
-  '((((background dark)) :foreground "#fab387")
-    (((background light)) :foreground "#fe640b")
-    (t :inherit warning))
+  '((t :inherit warning))
   "Face for how far a checkout is behind its upstream."
   :group 'herdr-panel)
 
 (defface herdr-panel-dirty
-  '((((background dark)) :foreground "#f38ba8")
-    (((background light)) :foreground "#d20f39")
-    (t :inherit error))
-  "Face for the count of files changed in a checkout.
-Red rather than the yellow it had, which the path now wears: two
-yellows side by side on one line told nothing apart."
+  '((t :inherit error))
+  "Face for the count of files changed in a checkout."
   :group 'herdr-panel)
 
 (defface herdr-panel-agent
-  '((((background dark)) :foreground "#94e2d5")
-    (((background light)) :foreground "#179299")
-    (t :inherit font-lock-type-face))
+  '((t :inherit font-lock-type-face))
   "Face for what kind of agent an entry is running."
   :group 'herdr-panel)
 
 (defface herdr-panel-window
-  '((((background dark)) :foreground "#89b4fa")
-    (((background light)) :foreground "#1e66f5"))
+  '((t :inherit font-lock-function-name-face))
   "Face for the window a pane sits in within its workspace."
   :group 'herdr-panel)
 
@@ -232,23 +200,20 @@ the frame."
   :group 'herdr-panel)
 
 (defface herdr-panel-current
-  '((((background dark)) :background "#313244" :extend t)
-    (((background light)) :background "#ccd0da" :extend t)
-    (t :background "grey25" :extend t))
+  '((t :inherit hl-line :extend t))
   "Face filling the row whose pane the selected window shows.
 Only a background, and a quiet one: the mark keeps its own colour and
-the name is brightened by `herdr-panel-current-label' instead.
+the name is set in bold by `herdr-panel-current-label' instead.
 
-Deliberately not inheriting `highlight'.  Themes are free to make that
-face shout, and several do; doom-peacock sets it to an orange red,
-which against these foregrounds is unreadable.  A row fill has to stay
-behind its text."
+It inherits `hl-line' rather than `highlight'.  Themes are free to make
+`highlight' shout, and several do; doom-peacock sets it to an orange
+red, which against these foregrounds is unreadable.  Themes keep
+`hl-line' quiet because it too sits behind text.  A theme that leaves
+`hl-line' unset falls back to `highlight' through its default spec."
   :group 'herdr-panel)
 
 (defface herdr-panel-current-label
-  '((((background dark)) :foreground "#cdd6f4" :weight bold)
-    (((background light)) :foreground "#4c4f69" :weight bold)
-    (t :weight bold))
+  '((t :weight bold))
   "Face for the name on the current row."
   :group 'herdr-panel)
 
@@ -263,7 +228,7 @@ whole row while the row pulses, so that an agent that starts waiting
 while you are reading something else catches the corner of your eye.
 The fill goes when the pulse ends; see `herdr-panel-attention-pulses'.
 
-Red where `herdr-panel-current' is grey, and further from the panel's
+Red where `herdr-panel-current' is neutral, and further from the panel's
 background than that face is, so that a row wanting the user is the
 louder of the two wherever both are on screen.
 
@@ -287,7 +252,7 @@ Green against the red of `herdr-panel-attention-blocked', and matched
 to it in weight rather than pitched under it: an agent that has
 stopped is as easy to leave sitting there as one that is asking, and
 the two are told apart by which colour they are, not by how loud.  The
-teal of `herdr-panel-done' sits on this, so the mark stays legible.
+mark of `herdr-panel-done' sits on this and stays legible.
 
 See `herdr-panel-attention-blocked' for why a whole row is filled, how
 long for, and how the fill merges."
@@ -299,9 +264,11 @@ long for, and how the fill merges."
     (t :inherit region))
   "Face marking the row point rests on, in place of the block cursor.
 A panel is a list to walk, and a square sitting on one character of a
-row says less about where you are than the row itself does.  A step
-brighter than `herdr-panel-current', so that the row you are on and
-the pane you are looking at stay apart when they are not the same row.
+row says less about where you are than the row itself does.  A fixed
+fill rather than `region', which a theme may give a foreground that
+would cover every mark on the row.  A theme should keep it apart from
+`herdr-panel-current', so that the row you are on and the pane you are
+looking at stay apart when they are not the same row.
 
 This one is an overlay rather than a merged face, so on the row it
 covers it hides whatever fill was underneath, an attention fill

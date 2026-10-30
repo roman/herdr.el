@@ -134,14 +134,12 @@ up to seconds of blocking per minute, so it is off by default."
   :group 'herdr-panel)
 
 (defface herdr-spaces-workspace
-  '((((background dark)) :foreground "#94e2d5" :weight medium)
-    (((background light)) :foreground "#179299" :weight medium))
+  '((t :inherit font-lock-type-face :weight medium))
   "Face for workspace headings."
   :group 'herdr-panel)
 
 (defface herdr-spaces-pane
-  '((((background dark)) :foreground "#a6adc8" :height 0.95)
-    (((background light)) :foreground "#6c6f85" :height 0.95))
+  '((t :inherit herdr-panel-label :height 0.95))
   "Face for pane headings."
   :group 'herdr-panel)
 
@@ -164,8 +162,7 @@ up to seconds of blocking per minute, so it is off by default."
   :group 'herdr-panel)
 
 (defface herdr-spaces-current-pane
-  '((((background dark)) :background "#35445c" :extend t)
-    (((background light)) :background "#cdd9f0" :extend t))
+  '((t :inherit herdr-panel-current))
   "Face marking the exact selected pane."
   :group 'herdr-panel)
 
