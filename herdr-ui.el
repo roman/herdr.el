@@ -155,6 +155,16 @@ Set this to nil to leave their settings untouched."
   :group 'herdr-panel
   :type 'boolean)
 
+(defcustom herdr-ui-tab-line t
+  "Whether the terminal `herdr-ui' lays out shows its workspace's tabs.
+When non-nil, the layout turns on `herdr-ui-tab-line-mode' in that
+terminal, so the tabs of its workspace appear on its tab line.  Set
+this to nil to keep the terminal's tab line empty; the tab commands
+such as `herdr-ui-tab-next' keep working without it."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'boolean)
+
 ;;; Layout
 
 ;;;###autoload
@@ -195,7 +205,7 @@ argument, PANE is read with completion."
     (herdr-ui--mark-main-window)
     (herdr-ui--show-panels)
     (when-let* ((buffer (herdr-ui--terminal-buffer pane connection)))
-      (unless connection
+      (when (and herdr-ui-tab-line (not connection))
         (with-current-buffer buffer
           (herdr-ui-tab-line-mode 1)))
       (when-let* ((window (get-buffer-window buffer)))
