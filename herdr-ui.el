@@ -494,7 +494,8 @@ of one workspace together."
                (not (seq-find (lambda (machine)
                                 (equal (plist-get machine :id) "local"))
                               machines)))
-      (push (list :id "local" :label "Local" :status 'online
+      (push (list :id "local" :label (herdr-machines-local-label)
+                  :status 'online
                   :snapshot herdr-session--snapshot)
             machines))
     (dolist (machine machines)

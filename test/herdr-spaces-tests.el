@@ -66,7 +66,7 @@ and none of what it answers is what these tests are about."
       (with-temp-buffer
         (let ((herdr-spaces-buffer-name (buffer-name)))
           (herdr-spaces-refresh)
-          (should (< (progn (goto-char (point-min)) (search-forward "Local"))
+          (should (< (progn (goto-char (point-min)) (search-forward (herdr-machines-local-label)))
                      (progn (goto-char (point-min))
                             (search-forward "project")))))))))
 

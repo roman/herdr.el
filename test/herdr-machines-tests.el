@@ -39,6 +39,23 @@
     (puthash "enabled" enabled profile)
     profile))
 
+;;; Naming This Machine
+
+(ert-deftest herdr-machines-local-label:names-this-host ()
+  "This machine is shown by its host name, without the domain.
+A column listing several machines under names of their own reads
+better when this one has a name too, rather than \"Local\"."
+  (let ((herdr-machines-local-label nil))
+    (cl-letf (((symbol-function 'system-name) (lambda () "reiner.lan")))
+      (should (equal (herdr-machines-local-label) "reiner"))
+      (should (equal (plist-get (car (herdr-machines-list)) :label)
+                     "reiner")))))
+
+(ert-deftest herdr-machines-local-label:takes-the-option-when-set ()
+  "A label the user chose wins over the host name."
+  (let ((herdr-machines-local-label "Desk"))
+    (should (equal (herdr-machines-local-label) "Desk"))))
+
 (ert-deftest herdr-machines--status:starts-enabled-machines-connecting ()
   "An enabled machine starts in the connecting state."
   (let ((herdr-machines--statuses (make-hash-table :test #'equal)))

@@ -72,6 +72,14 @@
   :group 'herdr-panel
   :type 'number)
 
+(defcustom herdr-machines-local-label nil
+  "Name shown for this machine among the others.
+Nil names it after this host, without its domain, so that it reads
+like the saved machines listed beside it.  A string is used as it is."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type '(choice (const :tag "This host's name" nil) string))
+
 ;;; Variables
 
 (defvar herdr-machines--profiles nil
@@ -308,9 +316,15 @@
   (remhash id herdr-machines--probes)
   (run-hooks 'herdr-machines-change-hook))
 
+(defun herdr-machines-local-label ()
+  "Return the name shown for this machine.
+See the option `herdr-machines-local-label'."
+  (or herdr-machines-local-label
+      (car (split-string (system-name) "\\."))))
+
 (defun herdr-machines-list ()
   "Return local and saved machines with their status and session snapshot."
-  (cons (list :id "local" :label "Local"
+  (cons (list :id "local" :label (herdr-machines-local-label)
               :status (if (herdr-session-live-p) 'online 'reconnecting)
               :snapshot herdr-session--snapshot)
         (mapcar (lambda (profile)
