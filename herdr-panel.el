@@ -318,6 +318,19 @@ giving the others their own marks can give this one a mark that says
   :group 'herdr-panel
   :type '(alist :key-type string :value-type string))
 
+(defcustom herdr-panel-mark-width 1
+  "Columns a row's status mark is allowed to take.
+A row's name, and every line drawn under it, start one column past
+this, so they line up however wide the mark actually draws.  Raise it
+when `herdr-panel-status-symbols', or something drawing in the mark's
+place, uses a mark wider than a character, such as an image: the name
+then keeps its column instead of being pushed along by the mark.
+
+At 1 a row is plain text, laid out by its characters alone."
+  :package-version '(herdr . "0.1.0")
+  :group 'herdr-panel
+  :type 'natnum)
+
 (defcustom herdr-panel-attention-faces
   '(("blocked" . herdr-panel-attention-blocked)
     ("done" . herdr-panel-attention-done))
@@ -455,7 +468,8 @@ moments it pulses, and only where a buffer here mirrors the row."
          (aside (plist-get spec :aside))
          (indent (or (plist-get spec :indent) " "))
          (start (point)))
-    (insert indent (herdr-panel-status-string status) " ")
+    (insert indent (herdr-panel-status-string status)
+            (herdr-panel--text-margin indent " "))
     ;; Beneath, because a label may already have coloured part of itself:
     ;; an agent names its workspace and the window inside it, and those
     ;; are two different things.
@@ -471,7 +485,8 @@ moments it pulses, and only where a buffer here mirrors the row."
     (insert "\n")
     ;; Aligned under the name rather than under the mark, so a column of
     ;; entries reads as a column of names with notes beneath them.
-    (let ((margin (make-string (+ (length indent) 2) ?\s)))
+    (let ((margin (herdr-panel--text-margin
+                   indent (make-string (+ (length indent) 2) ?\s))))
       (dolist (line (ensure-list detail))
         (when (and line (not (string-empty-p line)))
           (insert margin)
@@ -494,6 +509,17 @@ moments it pulses, and only where a buffer here mirrors the row."
                              'beneath))
     ;; Last, so that this fill is the one in front of the current row's.
     (herdr-panel-mark-attention start (point) spec)))
+
+(defun herdr-panel--text-margin (indent spaces)
+  "Return SPACES, padded to the text column of a row.
+INDENT is what precedes the row's mark.  The column is one past the
+`herdr-panel-mark-width' columns after INDENT.  At a width of 1 SPACES
+already reach it and are returned as they are."
+  (if (<= herdr-panel-mark-width 1)
+      spaces
+    (propertize spaces 'display
+                `(space :align-to ,(+ (length indent)
+                                      herdr-panel-mark-width 1)))))
 
 (defun herdr-panel-entry-line (spec)
   "Return SPEC drawn as one line, with completion fields recorded.

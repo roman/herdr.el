@@ -315,6 +315,32 @@ colours by status."
     (should (eq (herdr-panel-attention-face "blocked") 'herdr-panel-current))
     (should-not (herdr-panel-attention-face "done"))))
 
+(ert-deftest herdr-panel-insert-entry:aligns-name-and-detail-past-a-wide-mark ()
+  "The name and the lines under it start at one column past the mark.
+A configuration whose marks are wider than a character sets
+`herdr-panel-mark-width', and both lines are padded out to the same
+column however wide the mark it was given actually draws."
+  (let ((herdr-panel-mark-width 3))
+    (with-temp-buffer
+      (herdr-panel-insert-entry '(:status "idle" :label "herdr"
+                                  :detail "under it" :indent "  "))
+      (goto-char (point-min))
+      (search-forward "herdr")
+      (should (equal (get-text-property (- (match-beginning 0) 1) 'display)
+                     '(space :align-to 6)))
+      (search-forward "under it")
+      (should (equal (get-text-property (- (match-beginning 0) 1) 'display)
+                     '(space :align-to 6))))))
+
+(ert-deftest herdr-panel-insert-entry:leaves-a-one-column-mark-unpadded ()
+  "With the default width the row is plain text, as it always was."
+  (with-temp-buffer
+    (herdr-panel-insert-entry '(:status "idle" :label "herdr"
+                                :detail "under it"))
+    (should-not (text-property-not-all (point-min) (point-max)
+                                       'display nil))
+    (should (equal (buffer-string) " ○ herdr\n   under it\n"))))
+
 (ert-deftest herdr-panel-insert-entry:fills-a-row-that-has-just-begun ()
   "An agent that has just begun waiting fills its row, not only its mark.
 Every character of it, the newline included, so that the fill runs to
