@@ -568,6 +568,25 @@ nothing at all.  The second half is the state this guards against."
     (should-not (let ((completion-category-defaults nil))
                   (completion-all-completions "herdr" table nil 5)))))
 
+;;; Titles
+
+(ert-deftest herdr-panel-insert-title:sets-a-bare-title-as-the-panel-title ()
+  "A plain title wears `herdr-panel-title', so every panel's title matches.
+One that already carries a face keeps it, which is how a panel can give
+its title a face of its own."
+  (with-temp-buffer
+    (magit-section-mode)
+    (let ((inhibit-read-only t))
+      (magit-insert-section (herdr-test-root)
+        (herdr-panel-insert-title "Plain")
+        (herdr-panel-insert-title (propertize "Own" 'face 'bold))))
+    (goto-char (point-min))
+    (search-forward "Plain")
+    (should (eq (get-text-property (match-beginning 0) 'face)
+                'herdr-panel-title))
+    (search-forward "Own")
+    (should (eq (get-text-property (match-beginning 0) 'face) 'bold))))
+
 ;;; Marking The Row Point Rests On
 
 (defmacro herdr-panel-tests-with-rows (&rest body)

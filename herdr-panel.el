@@ -188,6 +188,13 @@ behind the name was too near the grey that means \"not open\"."
   "Face for the mark saying a pane is mirrored for reading only."
   :group 'herdr-panel)
 
+(defface herdr-panel-title
+  '((t :inherit magit-section-heading :weight bold :height 1.15))
+  "Face for the title at the head of each panel.
+Larger than the headings inside a panel, so that the panel's name reads
+as the top of its hierarchy rather than as one more heading in it."
+  :group 'herdr-panel)
+
 (defface herdr-panel-border
   '((((background dark)) :overline "#45475a" :extend t)
     (((background light)) :overline "#bcc0cc" :extend t)
@@ -404,10 +411,13 @@ underneath it keeps its own colour, a dimmed row included."
 
 (defun herdr-panel-insert-title (title &optional border)
   "Insert TITLE as this panel's heading.
+A TITLE without a face of its own is set in `herdr-panel-title'.
 BORDER, when given, is a face ruling the heading off from whatever is
 above it; `herdr-panel-border' is the face meant for that."
   (let ((start (point)))
-    (magit-insert-heading title)
+    (magit-insert-heading (if (get-text-property 0 'face title)
+                              title
+                            (herdr-panel-text title 'herdr-panel-title)))
     (when border
       (herdr-panel--add-face start (point) border 'beneath))))
 

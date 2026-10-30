@@ -117,19 +117,17 @@ up to seconds of blocking per minute, so it is off by default."
   :type 'face)
 
 (defface herdr-spaces-title
-  '((t :inherit magit-section-heading :weight bold :height 1.2))
+  '((t :inherit herdr-panel-title))
   "Face for the Spaces panel title."
   :group 'herdr-panel)
 
 (defface herdr-spaces-machine
-  '((((background dark)) :foreground "#89b4fa" :weight bold :height 1.1)
-    (((background light)) :foreground "#1e66f5" :weight bold :height 1.1))
+  '((t :inherit font-lock-function-name-face :weight bold))
   "Face for machine headings."
   :group 'herdr-panel)
 
 (defface herdr-spaces-space
-  '((((background dark)) :foreground "#cba6f7" :weight semi-bold :height 1.05)
-    (((background light)) :foreground "#8839ef" :weight semi-bold :height 1.05))
+  '((t :inherit font-lock-keyword-face :weight semi-bold))
   "Face for grouped space headings."
   :group 'herdr-panel)
 
