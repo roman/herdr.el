@@ -500,8 +500,11 @@ with the rest."
         :id (herdr-spaces--scoped-id (gethash "workspace_id" workspace))
         :label (herdr-panel-text (herdr-spaces--name workspace)
                                  'herdr-spaces-workspace)
-        :aside (unless pane-rows (herdr-spaces--pane-name workspace))
-        :detail (herdr-spaces--detail workspace)))
+        :detail (let ((lines (herdr-spaces--detail workspace)))
+                  (cons (herdr-spaces--lead-with-pane
+                         (unless pane-rows (herdr-spaces--pane workspace))
+                         (car lines))
+                        (cdr lines)))))
 
 (defun herdr-spaces--insert-pane (pane current indent)
   "Insert the row for PANE, emphasised against CURRENT, behind INDENT."
@@ -522,8 +525,8 @@ with the rest."
         :id (herdr-spaces--scoped-id (gethash "pane_id" pane))
         :label (herdr-panel-text (herdr-spaces--pane-label pane)
                                  'herdr-spaces-pane)
-        :aside (format "(%s)" (gethash "pane_id" pane))
-        :detail (herdr-panel-tab-name pane)))
+        :detail (herdr-spaces--lead-with-pane (gethash "pane_id" pane)
+                                              (herdr-panel-tab-name pane))))
 
 (defun herdr-spaces--workspace-panes (workspace)
   "Return every pane of WORKSPACE, in the order herdr reports them.
@@ -576,18 +579,26 @@ them is, because that is the one taking what is typed."
                              (gethash "pane_id" pane)))
                           panes))))))
 
-(defun herdr-spaces--pane-name (workspace)
-  "Return the pane WORKSPACE leads to, in parentheses, or nil.
-A herdr command names a pane and never a label, so the row carries the
+(defun herdr-spaces--lead-with-pane (pane line)
+  "Return LINE led by the pane identifier PANE, or LINE when PANE is nil.
+LINE is the first line under a row's name, and may be nil or empty.
+A herdr command names a pane and never a label, so a row carries the
 identifier for a reader to copy into one.  `herdr-spaces-visit' opens
 this same pane, which keeps the row and RET on it pointing at one
 terminal.
 
+The identifier sits under the name rather than after it, because names
+run long, and a name that runs off the edge of the column would take a
+trailing identifier with it.
+
 A workspace of several windows may run what the reader wants in
-another one of them.  The row says how many windows it holds, and the
+another one of them; the row says how many windows it holds, and the
 Agents panel names the pane of each agent it found."
-  (when-let* ((pane (herdr-spaces--pane workspace)))
-    (format "(%s)" pane)))
+  (cond
+    ((not pane) line)
+    ((or (null line) (string-empty-p line))
+     (herdr-panel-text pane 'herdr-panel-detail))
+    (t (concat (herdr-panel-text pane 'herdr-panel-detail) " " line))))
 
 (defun herdr-spaces--detail (workspace)
   "Return the lines that follow WORKSPACE's name.

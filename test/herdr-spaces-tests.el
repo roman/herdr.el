@@ -380,10 +380,10 @@ nobody opened in this Emacs is not in it."
              (columns (herdr-panel--completion-columns line)))
         (should (equal (herdr-spaces-tests--plain
                         (plist-get entry :detail))
-                       '("/tmp/project" "")))
+                       '("w1:p1 /tmp/project" "")))
         (should (equal (herdr-spaces-tests--plain columns)
-                       '("●" "project" "(w1:p1)" ""
-                         "/tmp/project" "")))))))
+                       '("●" "project" "" ""
+                         "w1:p1 /tmp/project" "")))))))
 
 ;;; A Row For Each Pane Of A Workspace
 
@@ -424,8 +424,8 @@ workspaces of one."
       (magit-insert-section (herdr-spaces-tests-root)
         (herdr-spaces--insert (car (herdr-session-spaces)) nil nil))
       (let ((drawn (buffer-substring-no-properties (point-min) (point-max))))
-        (should (string-match-p "(w1:p1)" drawn))
-        (should (string-match-p "(w1:p2)" drawn))))))
+        (should (string-match-p "shell\n *w1:p1" drawn))
+        (should (string-match-p "shell\n *w1:p2" drawn))))))
 
 (ert-deftest herdr-spaces--insert-workspace:fills-the-selected-subtree ()
   "A selected workspace fills its heading and each child pane row."
@@ -435,7 +435,7 @@ workspaces of one."
         (magit-insert-section (herdr-spaces-tests-root)
           (herdr-spaces--insert-workspace workspace "w1" "w1:p1" " ")))
       (goto-char (point-min))
-      (search-forward "(w1:p2)")
+      (search-forward "w1:p2")
       (should (memq 'herdr-spaces-current-workspace
                     (ensure-list (get-text-property (match-beginning 0)
                                                     'face)))))))
@@ -472,9 +472,14 @@ Kept, it would name the active tab's pane twice in the same column."
   (let ((herdr-spaces-git nil))
     (herdr-session-with-snapshot (herdr-spaces-tests--snapshot)
       (let ((workspace (car (herdr-session-workspaces))))
-        (should (plist-get (herdr-spaces--entry workspace nil) :aside))
-        (should-not (plist-get (herdr-spaces--entry workspace nil t)
-                               :aside))))))
+        (should (string-prefix-p
+                 "w1:p1 "
+                 (car (plist-get (herdr-spaces--entry workspace nil)
+                                 :detail))))
+        (should-not (string-prefix-p
+                     "w1:p1"
+                     (car (plist-get (herdr-spaces--entry workspace nil t)
+                                     :detail))))))))
 
 (ert-deftest herdr-spaces--pane-label:names-the-agent-it-found ()
   "A pane is told from its siblings by what herdr knows of it."
@@ -501,15 +506,35 @@ Kept, it would name the active tab's pane twice in the same column."
 ;;; Naming The Pane To Address
 
 (ert-deftest herdr-spaces--entry:names-the-pane-to-address ()
-  "A workspace row carries the pane it leads to.
+  "A workspace row names the pane it leads to ahead of its path.
 A herdr command names that pane, so a reader looking at two checkouts
 of one repository can copy the identifier off the row rather than
-search the session for it."
+search the session for it.  Under the name rather than after it,
+because a long name runs off the edge of the column and must not take
+the identifier with it."
   (herdr-spaces-with-snapshot (herdr-spaces-tests--snapshot)
     (let ((entry (herdr-spaces--entry (car (herdr-session-workspaces))
                                       nil)))
-      (should (equal (substring-no-properties (plist-get entry :aside))
-                     "(w1:p1)")))))
+      (should (string-prefix-p
+               "w1:p1 " (substring-no-properties
+                         (car (plist-get entry :detail)))))
+      (should-not (string-match-p
+                   "w1:p1" (substring-no-properties
+                            (plist-get entry :label))))
+      (should-not (plist-get entry :aside)))))
+
+(ert-deftest herdr-spaces--pane-entry:leads-with-the-pane ()
+  "A pane row names its identifier under its name, as a workspace does."
+  (herdr-spaces-with-snapshot (herdr-spaces-tests--snapshot)
+    (let ((entry (herdr-spaces--pane-entry (herdr-session-pane "w1:p1")
+                                           nil)))
+      (should (string-prefix-p
+               "w1:p1" (substring-no-properties
+                        (car (ensure-list (plist-get entry :detail))))))
+      (should-not (string-match-p
+                   "w1:p1" (substring-no-properties
+                            (plist-get entry :label))))
+      (should-not (plist-get entry :aside)))))
 
 (ert-deftest herdr-spaces--entry:omits-the-pane-when-there-is-none ()
   "A workspace herdr reports no pane in has no identifier to offer."
@@ -517,9 +542,11 @@ search the session for it."
       (list :workspaces
             (vector (herdr-session-test-workspace "w1" "herdr" "idle"))
             :panes (vector))
-    (should (null (plist-get (herdr-spaces--entry
-                              (herdr-session-workspace "w1") nil)
-                             :aside)))))
+    (should (equal (substring-no-properties
+                    (plist-get (herdr-spaces--entry
+                                (herdr-session-workspace "w1") nil)
+                               :label))
+                   "herdr"))))
 
 ;;; _
 (provide 'herdr-spaces-tests)
