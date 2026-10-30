@@ -260,19 +260,53 @@ fraction of the width it was just given."
     (set-window-parameter window 'herdr-ui-main nil))
   (set-window-parameter (selected-window) 'herdr-ui-main t))
 
-(defun herdr-ui--show-panels ()
-  "Put the panels of `herdr-ui-panels' in their column, in order.
-An entry whose function is not defined is left out, and the weights of
-the rest are shared over what is left."
+(defun herdr-ui--wanted-panels ()
+  "Return the entries of `herdr-ui-panels' the column should show.
+An entry whose function is not defined is left out.  So is one whose
+function carries a `herdr-ui-shown-p' property that answers nil when
+called: that is how a panel with nothing in it, such as reviews when no
+review is open, gives its room to the others until it has something."
   ;; `functionp' rather than `fboundp', which signals on anything but a
   ;; symbol: an entry may be a function rather than a name for one.
-  (let* ((panels (seq-filter (lambda (panel) (functionp (car panel)))
-                             herdr-ui-panels))
+  (seq-filter (lambda (panel)
+                (let ((function (car panel)))
+                  (and (functionp function)
+                       (if-let* (((symbolp function))
+                                 (shown-p (get function 'herdr-ui-shown-p)))
+                           (funcall shown-p)
+                         t))))
+              herdr-ui-panels))
+
+(defun herdr-ui--show-panels ()
+  "Put the panels of `herdr-ui-panels' in their column, in order.
+Only the entries `herdr-ui--wanted-panels' returns are shown, and the
+weights of those are shared over the whole column.  The functions shown
+are remembered on the frame, for `herdr-ui--sync-panels'."
+  (let* ((panels (herdr-ui--wanted-panels))
          (total (float (apply #'+ 0 (mapcar #'cdr panels))))
          (slot 0))
+    (set-frame-parameter nil 'herdr-ui-panels (mapcar #'car panels))
     (dolist (panel panels)
       (herdr-ui--display (funcall (car panel)) slot (/ (cdr panel) total))
       (setq slot (1+ slot)))))
+
+(defun herdr-ui--sync-panels ()
+  "Lay the column out again on any frame whose panels changed.
+A panel comes or goes when its `herdr-ui-shown-p' answer changes, and
+the session changing is what changes it.  A frame whose panels are the
+same is left alone, so a session change does not rebuild windows under
+the user for nothing.  The selected window is kept."
+  (dolist (frame (frame-list))
+    (when (and (herdr-ui-panels-visible-p frame)
+               (not (equal (mapcar #'car (herdr-ui--wanted-panels))
+                           (frame-parameter frame 'herdr-ui-panels))))
+      (with-selected-frame frame
+        (let ((window (selected-window)))
+          (herdr-ui--clear frame)
+          (herdr-ui--show-panels)
+          (when (window-live-p window)
+            (select-window window))
+          (herdr-ui--refit-terminals frame))))))
 
 (defun herdr-ui--clear (&optional frame)
   "Take the herdr side windows off FRAME, leaving other windows alone."
@@ -688,6 +722,12 @@ was just asked to make."
 Add this to `ghostel-mode-hook' to get tabs on terminals opened later."
   (when (bound-and-true-p herdr-term--pane)
     (herdr-ui-tab-line-mode 1)))
+
+;;; Following The Session
+
+;; Late in the hook, so that a panel's own reading of the change, such as
+;; the reviews it now lists, is done before the column asks what to show.
+(add-hook 'herdr-session-change-hook #'herdr-ui--sync-panels 90)
 
 ;;; _
 (provide 'herdr-ui)

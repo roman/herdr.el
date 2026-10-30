@@ -127,6 +127,59 @@ be rewritten."
     (herdr-ui--show-panels)
     (should (null herdr-ui-tests--shown))))
 
+;;; Leaving Out A Panel With Nothing To Show
+
+(defvar herdr-ui-tests--wanted nil
+  "What `herdr-ui-tests--optional-panel' answers when asked to show.")
+
+(defun herdr-ui-tests--optional-panel ()
+  "Stand in for a panel that is shown only when it has something."
+  (get-buffer-create "optional"))
+
+(put 'herdr-ui-tests--optional-panel 'herdr-ui-shown-p
+     (lambda () herdr-ui-tests--wanted))
+
+(ert-deftest herdr-ui--show-panels:skips-a-panel-with-nothing-to-show ()
+  "A panel whose `herdr-ui-shown-p' answers nil takes no room."
+  (herdr-ui-with-layout
+    (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 3)
+                            (herdr-ui-tests--optional-panel . 1)))
+    (let ((herdr-ui-tests--wanted nil))
+      (herdr-ui--show-panels))
+    (should (equal (mapcar #'car herdr-ui-tests--shown) '("spaces")))
+    (should (equal (mapcar #'cddr herdr-ui-tests--shown) '(1.0)))))
+
+(ert-deftest herdr-ui--show-panels:shows-a-panel-once-it-has-something ()
+  "The same panel takes its share when `herdr-ui-shown-p' answers t."
+  (herdr-ui-with-layout
+    (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 3)
+                            (herdr-ui-tests--optional-panel . 1)))
+    (let ((herdr-ui-tests--wanted t))
+      (herdr-ui--show-panels))
+    (should (equal (mapcar #'car herdr-ui-tests--shown)
+                   '("spaces" "optional")))))
+
+(ert-deftest herdr-ui--sync-panels:redraws-when-a-panel-comes-or-goes ()
+  "The column is laid out again when a panel's answer changes.
+Only then: a session change that leaves every answer alone must not
+rebuild the windows under the user."
+  (herdr-ui-with-layout
+    (setq herdr-ui-panels `((,(herdr-ui-tests--panel "spaces") . 3)
+                            (herdr-ui-tests--optional-panel . 1)))
+    (cl-letf (((symbol-function 'herdr-ui-panels-visible-p)
+               (lambda (&optional _frame) t))
+              ((symbol-function 'herdr-ui--clear) #'ignore)
+              ((symbol-function 'herdr-ui--refit-terminals) #'ignore))
+      (let ((herdr-ui-tests--wanted nil))
+        (herdr-ui--show-panels)
+        (setq herdr-ui-tests--shown nil)
+        (herdr-ui--sync-panels)
+        (should (null herdr-ui-tests--shown)))
+      (let ((herdr-ui-tests--wanted t))
+        (herdr-ui--sync-panels)
+        (should (equal (mapcar #'car herdr-ui-tests--shown)
+                       '("spaces" "optional")))))))
+
 ;;; Passing The Column By
 
 ;; These call the real `herdr-ui--display', which the fixture above stubs

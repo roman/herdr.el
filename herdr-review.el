@@ -347,6 +347,12 @@ the same as one nobody asked for."
       (with-selected-window window
         (herdr-panel-open-pane new-pane 'control)))))
 
+(defun herdr-review-any-p ()
+  "Return non-nil when any machine reports a review.
+The layout asks this to decide whether the reviews panel takes a place
+in the column; with nothing to review it gives its room away."
+  (and (herdr-machines-rows #'herdr-review-list #'herdr-review--entry) t))
+
 (defun herdr-review--panes ()
   "Return the pane identifiers of the reviews in panel order."
   (mapcar (lambda (review) (gethash "pane_id" review))
@@ -361,6 +367,7 @@ the same as one nobody asked for."
 ;; is what makes requiring this file the whole of the setup.
 
 (add-to-list 'herdr-agents-hidden-kinds herdr-review-agent)
+(put 'herdr-review-panel 'herdr-ui-shown-p #'herdr-review-any-p)
 (setq herdr-review--known-panes (herdr-review--panes))
 (add-hook 'herdr-session-change-hook #'herdr-review--open-new-review 10)
 
