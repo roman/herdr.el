@@ -254,6 +254,54 @@ agent that wants the user."
                            (herdr-session-spaces))
                    '("first" "second" "third")))))
 
+(defun herdr-session-tests--terminal (micros)
+  "Return a terminal identifier made MICROS microseconds into the epoch.
+herdr writes the creation time as thirteen hex digits, then a counter."
+  (format "term_%013x%x" micros 1))
+
+(ert-deftest herdr-session-node-age:reads-the-terminal-creation-time ()
+  "A node's age is the creation time written into its terminal."
+  (let ((node (make-hash-table :test #'equal)))
+    (puthash "terminal_id" (herdr-session-tests--terminal 1790000000000000)
+             node)
+    (should (= (herdr-session-node-age node) 1790000000000000))
+    (should-not (herdr-session-node-age (make-hash-table :test #'equal)))))
+
+(ert-deftest herdr-session-oldest-first:keeps-the-unaged-last-in-order ()
+  "Nodes run oldest first; those without an age follow, as given."
+  (let ((nodes (mapcar (lambda (spec)
+                         (let ((node (make-hash-table :test #'equal)))
+                           (puthash "id" (car spec) node)
+                           (when (cdr spec)
+                             (puthash "terminal_id"
+                                      (herdr-session-tests--terminal (cdr spec))
+                                      node))
+                           node))
+                       '(("young" . 300) ("bare-a") ("old" . 100)
+                         ("bare-b") ("middle" . 200)))))
+    (should (equal (mapcar (lambda (node) (gethash "id" node))
+                           (herdr-session-oldest-first nodes))
+                   '("old" "middle" "young" "bare-a" "bare-b")))))
+
+(ert-deftest herdr-session-spaces:puts-the-oldest-workspace-first ()
+  "A workspace is as old as its oldest pane, and spaces follow that.
+The workspace holding the session's first agent leads, whatever order
+herdr reports the workspaces in."
+  (herdr-session-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "late" "idle")
+                    (herdr-session-test-workspace "w2" "early" "idle"))
+            :panes
+            (vector (list :pane_id "w1:p1" :workspace_id "w1"
+                          :terminal_id (herdr-session-tests--terminal 300))
+                    (list :pane_id "w2:p1" :workspace_id "w2"
+                          :terminal_id (herdr-session-tests--terminal 500))
+                    (list :pane_id "w2:p2" :workspace_id "w2"
+                          :terminal_id (herdr-session-tests--terminal 100))))
+    (should (equal (mapcar (lambda (space) (plist-get space :label))
+                           (herdr-session-spaces))
+                   '("early" "late")))))
+
 (ert-deftest herdr-session-spaces:ungrouped-workspace-keeps-its-label ()
   "A lone checkout is its own space and is named after itself.
 Naming it after the repository would rename every unrelated workspace

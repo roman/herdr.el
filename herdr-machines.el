@@ -374,10 +374,11 @@ a different one after each probe."
           :pane pane)))
 
 (defun herdr-machines-rows (nodes-function entry)
-  "Return (TARGET . ROW) for the nodes on every machine, attention first.
+  "Return (TARGET . ROW) for the nodes on every machine.
 NODES-FUNCTION and ENTRY are as in `herdr-panel-read-nodes', and each
-is called with one machine's tree current.  Ties keep the order
-NODES-FUNCTION gave, local machine first.
+is called with one machine's tree current.  Rows keep the order
+NODES-FUNCTION gave, local machine first; a panel wanting attention
+first passes the result to `herdr-machines-attention-first'.
 
 A pane identifier is unique only on its own server, so a row's
 emphasis is worked out here, against the machine of each terminal, and
@@ -387,11 +388,7 @@ machine, because pulses are keyed by `:id' and track local panes."
   (let* ((terminal (herdr-panel-current-terminal-buffer))
          (current (and terminal (herdr-panel--buffer-pane terminal)))
          (current-machine (herdr-machines-buffer-machine-id terminal)))
-    (seq-sort-by
-     (lambda (row)
-       (herdr-session-status-priority (plist-get (cdr row) :status)))
-     #'>
-     (herdr-machines-collect
+    (herdr-machines-collect
       (lambda (machine)
         (let ((id (plist-get machine :id)))
           (mapcar
@@ -413,7 +410,15 @@ machine, because pulses are keyed by `:id' and track local panes."
                                              (plist-get row :aside)
                                              machine)))
                              row))))
-           (funcall nodes-function))))))))
+           (funcall nodes-function)))))))
+
+(defun herdr-machines-attention-first (rows)
+  "Return ROWS, (TARGET . ROW) pairs, with those wanting the user first.
+Ties keep their order, so rows sharing a status do not shuffle."
+  (seq-sort-by (lambda (row)
+                 (herdr-session-status-priority (plist-get (cdr row) :status)))
+               #'>
+               rows))
 
 (defun herdr-machines-buffer-machine-id (buffer)
   "Return the identifier of the machine terminal BUFFER mirrors."
@@ -449,19 +454,23 @@ on a remote machine.  ACCESS is as in `herdr-panel-open-pane'."
         (concat aside " " label)
       label)))
 
-(defun herdr-machines-read-nodes (prompt nodes-function entry empty)
+(defun herdr-machines-read-nodes (prompt nodes-function entry empty
+                                         &optional order)
   "Read one of a panel's nodes on any machine and return its target.
 PROMPT, NODES-FUNCTION, ENTRY and EMPTY are as in
 `herdr-panel-read-nodes'.  The nodes come from every machine that is
 online, as `herdr-machines-rows' lists them, and the answer is what
-`herdr-machines-target' makes of the chosen one."
+`herdr-machines-target' makes of the chosen one.  ORDER, when given,
+is applied to those rows first, so a prompt can match its panel's
+order, such as `herdr-machines-attention-first'."
   (herdr-panel-read-rows
    prompt
    (lambda (_current)
      (herdr-machines-refresh-online)
      (mapcar (lambda (row)
                (cons (herdr-panel-entry-line (cdr row)) (car row)))
-             (herdr-machines-rows nodes-function entry)))
+             (funcall (or order #'identity)
+                      (herdr-machines-rows nodes-function entry))))
    empty))
 
 (defun herdr-machines-read-online ()

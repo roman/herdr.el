@@ -417,6 +417,25 @@ workspaces of one."
         (should (eql (length herdr-panel-tests--offered) 1))
         (should (string-match-p "project" (car herdr-panel-tests--offered)))))))
 
+(ert-deftest herdr-spaces--workspace-panes:lists-the-oldest-first ()
+  "A workspace's panes run in the order they were made.
+The pane that started the workspace, usually its driving agent, leads,
+as it leads in the Agents panel."
+  (herdr-spaces-with-snapshot
+      (list :workspaces
+            (vector (herdr-session-test-workspace "w1" "project" "idle"))
+            :panes
+            (vector (append (herdr-spaces-tests--pane "w1:pB" "w1")
+                            (list :terminal_id
+                                  (herdr-session-tests--terminal 200)))
+                    (append (herdr-spaces-tests--pane "w1:p1" "w1")
+                            (list :terminal_id
+                                  (herdr-session-tests--terminal 100)))))
+    (should (equal (mapcar (lambda (pane) (gethash "pane_id" pane))
+                           (herdr-spaces--workspace-panes
+                            (herdr-session-workspace "w1")))
+                   '("w1:p1" "w1:pB")))))
+
 (ert-deftest herdr-spaces--insert-workspace:draws-a-row-for-each-pane ()
   "A workspace of several panes carries a row for each of them."
   (herdr-spaces-with-snapshot (herdr-spaces-tests--split "w1" "w1:p1" "w1:p2")

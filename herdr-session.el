@@ -633,15 +633,57 @@ identifier, so that it still appears exactly once."
     (or (and worktree (gethash "repo_key" worktree))
         (gethash "workspace_id" workspace))))
 
+(defun herdr-session-node-age (node)
+  "Return when NODE's terminal was made, in microseconds, or nil.
+herdr writes the creation time into a terminal identifier as thirteen
+hex digits after \"term_\", ahead of a counter.  The identifier is
+meant to be opaque; this reads it because herdr reports no creation
+time of its own, and returns nil for a node whose identifier does not
+have that shape."
+  (when-let* ((id (gethash "terminal_id" node))
+              ((string-match "\\`term_\\([[:xdigit:]]\\{13\\}\\)" id)))
+    (string-to-number (match-string 1 id) 16)))
+
+(defun herdr-session-oldest-first (nodes &optional age-function)
+  "Return NODES sorted oldest first by AGE-FUNCTION.
+AGE-FUNCTION defaults to `herdr-session-node-age'.  Nodes without an
+age follow the rest, and nodes of equal age keep the order given, so a
+list does not shuffle between redraws."
+  (let* ((age-function (or age-function #'herdr-session-node-age))
+         (aged (mapcar (lambda (node) (cons (funcall age-function node) node))
+                       nodes)))
+    (mapcar #'cdr
+            (seq-sort (lambda (first second)
+                        (and (car first)
+                             (or (null (car second))
+                                 (< (car first) (car second)))))
+                      aged))))
+
+(defun herdr-session--workspace-age (workspace)
+  "Return the age of WORKSPACE's oldest pane, or nil."
+  (let* ((id (gethash "workspace_id" workspace))
+         (ages (delq nil (mapcar
+                          (lambda (pane)
+                            (and (equal (gethash "workspace_id" pane) id)
+                                 (herdr-session-node-age pane)))
+                          (herdr-session-panes)))))
+    (and ages (apply #'min ages))))
+
 (defun herdr-session-spaces ()
-  "Return the spaces of this session, in workspace order.
+  "Return the spaces of this session, the oldest first.
+A workspace is as old as its oldest pane, and a space takes its place
+from its oldest workspace, so the workspace that started the session
+leads.  Workspaces whose age is unknown keep herdr's order after the
+rest.
 Each space is a plist with `:key', `:label', `:workspaces' and
 `:agent-status', the last being the loudest status among its members.
 A space of one workspace is that workspace, which is how herdr renders
 an ungrouped checkout."
   (let ((order nil)
         (members (make-hash-table :test #'equal)))
-    (dolist (workspace (herdr-session-workspaces))
+    (dolist (workspace (herdr-session-oldest-first
+                        (herdr-session-workspaces)
+                        #'herdr-session--workspace-age))
       (let ((key (herdr-session-space-key workspace)))
         (unless (gethash key members)
           (push key order))

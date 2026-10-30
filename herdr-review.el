@@ -185,7 +185,8 @@ what starts one."
   (herdr-machines-read-nodes "Review: "
                              #'herdr-review-list
                              #'herdr-review--entry
-                             "Nothing is waiting to be reviewed"))
+                             "Nothing is waiting to be reviewed"
+                             #'herdr-machines-attention-first))
 
 (defun herdr-review-refresh ()
   "Redraw the reviews panel from the session tree."
@@ -195,8 +196,9 @@ what starts one."
       (magit-insert-section (herdr-review-root)
         (herdr-panel-insert-title
          "Reviews" (and herdr-review-border 'herdr-panel-border))
-        (let ((rows (herdr-machines-rows #'herdr-review-list
-                                         #'herdr-review--entry)))
+        (let ((rows (herdr-machines-attention-first
+                     (herdr-machines-rows #'herdr-review-list
+                                          #'herdr-review--entry))))
           (if rows
               (mapc #'herdr-review--insert rows)
             (insert (propertize "  nothing to review\n"

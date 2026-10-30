@@ -177,18 +177,16 @@ pressing RET on the row would."
 ;;; Rendering
 
 (defun herdr-agents--sorted ()
-  "Return the agents to list from the current tree, attention first.
-Ties keep herdr's own order, so the list does not shuffle while
-several agents share a status.  Kinds in `herdr-agents-hidden-kinds'
-are left out."
-  (seq-sort-by (lambda (agent)
-                 (herdr-session-status-priority
-                  (herdr-session-status agent)))
-               #'>
-               (seq-remove (lambda (agent)
-                             (member (gethash "agent" agent)
-                                     herdr-agents-hidden-kinds))
-                           (herdr-session-agents))))
+  "Return the agents to list from the current tree, the oldest first.
+The agent driving the others started first, so it leads, and the order
+matches the Spaces panel's.  Status shows in each row's mark rather
+than in its place, which would move rows as agents change state.
+Kinds in `herdr-agents-hidden-kinds' are left out."
+  (herdr-session-oldest-first
+   (seq-remove (lambda (agent)
+                 (member (gethash "agent" agent)
+                         herdr-agents-hidden-kinds))
+               (herdr-session-agents))))
 
 (defun herdr-agents--entry (agent current)
   "Return the row for AGENT, emphasised against the CURRENT pane.

@@ -411,6 +411,32 @@ and the local row of the same identifier is not even open."
                        '(closed current))))
           (kill-buffer terminal))))))
 
+(ert-deftest herdr-machines-rows:keeps-the-order-it-was-given ()
+  "Rows keep the order the nodes function gave them, whatever their status.
+A panel ordering by age keeps that order."
+  (herdr-session-with-snapshot
+      (list :agents (vector (list :pane_id "w1:p1" :agent_status "idle")
+                            (list :pane_id "w1:p2" :agent_status "blocked")))
+    (cl-letf* ((snapshot herdr-session--snapshot)
+               ((symbol-function 'herdr-machines-list)
+                (lambda () (list (list :id "local" :status 'online
+                                       :snapshot snapshot)))))
+      (should (equal (mapcar (lambda (row) (plist-get (cdr row) :label))
+                             (herdr-machines-rows
+                              #'herdr-session-agents
+                              (lambda (node _current)
+                                (list :status (herdr-session-status node)
+                                      :label (gethash "pane_id" node)))))
+                     '("w1:p1" "w1:p2"))))))
+
+(ert-deftest herdr-machines-attention-first:puts-the-wanting-rows-first ()
+  "Rows wanting the user lead, and ties keep their order."
+  (should (equal (mapcar #'car
+                         (herdr-machines-attention-first
+                          '((a :status "idle") (b :status "blocked")
+                            (c :status "working") (d :status "blocked"))))
+                 '(b d c a))))
+
 (ert-deftest herdr-machines-visit:opens-a-remote-pane-through-its-connection ()
   "A remote target reaches the shared opener with its machine's connection.
 A plist naming the local machine, which the every-pane prompt makes

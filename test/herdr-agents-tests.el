@@ -46,22 +46,24 @@
 
 ;;; Ordering
 
-(ert-deftest herdr-agents--sorted:puts-attention-first ()
-  "An agent that wants the user outranks one that is busy.
-The panel is read top down and often only at the top, so an order that
-buries a blocked agent under working ones defeats the panel."
+(ert-deftest herdr-agents--sorted:lists-the-oldest-first ()
+  "Agents run in the order their panes were made, whatever their status.
+The agent driving the others starts first, so it leads, and the list
+matches the order of the Spaces panel."
   (herdr-session-with-snapshot
       (herdr-agents-tests--panes
-       (herdr-agents-tests--agent "w1:p1" "claude" "idle")
-       (herdr-agents-tests--agent "w1:p2" "claude" "working")
-       (herdr-agents-tests--agent "w1:p3" "claude" "blocked")
-       (herdr-agents-tests--agent "w1:p4" "claude" "done"))
+       (append (herdr-agents-tests--agent "w1:p1" "claude" "blocked")
+               (list :terminal_id (herdr-session-tests--terminal 300)))
+       (append (herdr-agents-tests--agent "w1:p2" "codex" "idle")
+               (list :terminal_id (herdr-session-tests--terminal 100)))
+       (append (herdr-agents-tests--agent "w1:p3" "codex" "working")
+               (list :terminal_id (herdr-session-tests--terminal 200))))
     (should (equal (mapcar (lambda (agent) (gethash "pane_id" agent))
                            (herdr-agents--sorted))
-                   '("w1:p3" "w1:p4" "w1:p2" "w1:p1")))))
+                   '("w1:p2" "w1:p3" "w1:p1")))))
 
-(ert-deftest herdr-agents--sorted:keeps-herdr-order-within-a-status ()
-  "Agents sharing a status do not shuffle between redraws."
+(ert-deftest herdr-agents--sorted:keeps-herdr-order-without-an-age ()
+  "Agents whose age is unknown do not shuffle between redraws."
   (herdr-session-with-snapshot
       (herdr-agents-tests--panes
        (herdr-agents-tests--agent "w1:p1" "claude" "working")
@@ -112,14 +114,17 @@ the label would stop hiding the moment that label changed."
 ;;; Naming An Agent Instead Of Walking To It
 
 (ert-deftest herdr-agents--read:offers-what-the-panel-lists ()
-  "The prompt is the panel, so the loudest agent is the first candidate.
-A prompt that reordered them would bury exactly the agent the panel
-exists to raise."
+  "The prompt is the panel, so the oldest agent is the first candidate.
+A prompt that reordered them would not match the list the reader just
+saw."
   (herdr-session-with-snapshot
       (herdr-agents-tests--panes
-       (herdr-agents-tests--agent "w1:p1" "claude" "idle")
-       (herdr-agents-tests--agent "w1:p2" "claude" "working")
-       (herdr-agents-tests--agent "w1:p3" "claude" "blocked"))
+       (append (herdr-agents-tests--agent "w1:p1" "claude" "idle")
+               (list :terminal_id (herdr-session-tests--terminal 200)))
+       (append (herdr-agents-tests--agent "w1:p2" "claude" "working")
+               (list :terminal_id (herdr-session-tests--terminal 300)))
+       (append (herdr-agents-tests--agent "w1:p3" "claude" "blocked")
+               (list :terminal_id (herdr-session-tests--terminal 100))))
     (herdr-panel-tests-offline
       (herdr-panel-tests-choosing 0
         (should (equal (herdr-agents--read) "w1:p3"))
@@ -136,14 +141,14 @@ machine's connection rather than to a local pane of the same name."
         (herdr-agents-tests--panes
          (herdr-agents-tests--agent "w1:p1" "claude" "blocked"))
       (herdr-panel-tests-offline
-        (herdr-panel-tests-choosing 0
+        (herdr-panel-tests-choosing 1
           (should (equal (herdr-agents--read)
                          '(:machine (:id "general-dev" :label "general-dev"
                                      :status online)
                            :pane "w1:p1")))
           (should (eql (length herdr-panel-tests--offered) 2))
           (should (string-match-p "general-dev"
-                                  (car herdr-panel-tests--offered))))))))
+                                  (cadr herdr-panel-tests--offered))))))))
 
 (ert-deftest herdr-agents--read:refuses-when-there-is-nothing-to-name ()
   "A session with no agent says so rather than raising an empty prompt."

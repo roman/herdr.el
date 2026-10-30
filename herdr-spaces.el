@@ -529,14 +529,16 @@ with the rest."
                                               (herdr-panel-tab-name pane))))
 
 (defun herdr-spaces--workspace-panes (workspace)
-  "Return every pane of WORKSPACE, in the order herdr reports them.
+  "Return every pane of WORKSPACE, the oldest first.
 Every tab's panes and not only the active tab's: a reader looking for a
 terminal wants the ones that exist, and which tab herdr last focused is
-not something they chose."
+not something they chose.  The pane that started the workspace,
+usually its driving agent, leads, as it leads in the Agents panel."
   (let ((id (gethash "workspace_id" workspace)))
-    (seq-filter (lambda (pane)
-                  (equal (gethash "workspace_id" pane) id))
-                (herdr-session-panes))))
+    (herdr-session-oldest-first
+     (seq-filter (lambda (pane)
+                   (equal (gethash "workspace_id" pane) id))
+                 (herdr-session-panes)))))
 
 (defun herdr-spaces--pane-label (pane)
   "Return the name to show for PANE.
